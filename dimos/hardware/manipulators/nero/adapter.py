@@ -36,6 +36,7 @@ logger = setup_logger()
 NERO_DOF = 7
 ENABLE_RETRY_COUNT = 50
 ENABLE_RETRY_INTERVAL = 0.01
+DEFAULT_ENABLE_CALL_TIMEOUT = 0.2
 DEFAULT_SPEED_PERCENT = 50
 DEFAULT_FIRMWARE_VERSION = "v120"
 DEFAULT_INTERFACE = "socketcan"
@@ -84,6 +85,8 @@ class NeroAdapter(ManipulatorAdapter):
         effector_type: str | None = None,
         gripper_force: float = DEFAULT_GRIPPER_FORCE,
         disable_on_disconnect: bool = DEFAULT_DISABLE_ON_DISCONNECT,
+        enable_retry_count: int = ENABLE_RETRY_COUNT,
+        enable_call_timeout: float = DEFAULT_ENABLE_CALL_TIMEOUT,
         **sdk_kwargs: object,
     ) -> None:
         if dof != NERO_DOF:
@@ -98,6 +101,8 @@ class NeroAdapter(ManipulatorAdapter):
         self._effector_type = effector_type
         self._gripper_force = gripper_force
         self._disable_on_disconnect = disable_on_disconnect
+        self._enable_retry_count = enable_retry_count
+        self._enable_call_timeout = enable_call_timeout
         self._sdk_kwargs = sdk_kwargs
         self._sdk: Any | None = None
         self._effector: Any | None = None
@@ -120,9 +125,11 @@ class NeroAdapter(ManipulatorAdapter):
                 **self._sdk_kwargs,
             )
             sdk = AgxArmFactory.create_arm(cfg)
-            self._effector = self._init_effector(sdk)
+            # Establish the CAN bus first: pyAgxArm effector init talks to the
+            # gripper over the bus, so it must run after connect().
             sdk.connect()
             self._sdk = sdk
+            self._effector = self._init_effector(sdk)
 
             if self._has_comm_error():
                 logger.error(
@@ -342,6 +349,13 @@ class NeroAdapter(ManipulatorAdapter):
             if hasattr(sdk, "electronic_emergency_stop"):
                 sdk.electronic_emergency_stop()
                 return True
+            # Fallback: hold the current pose with a joint move. The SDK may be
+            # in CPV motion mode (servo/velocity control), where move_j is
+            # rejected, so switch back to joint motion mode first.
+            if not self._set_motion_mode(JOINT_MOTION_MODE):
+                logger.error("Failed to switch NERO to joint mode for stop fallback")
+                return False
+            self._control_mode = ControlMode.POSITION
             sdk.move_j(self.read_joint_positions())
             return True
         except Exception:
@@ -356,11 +370,11 @@ class NeroAdapter(ManipulatorAdapter):
             if enable:
                 if self._enabled:
                     return True
-                for attempt in range(ENABLE_RETRY_COUNT):
-                    if sdk.enable():
+                for attempt in range(self._enable_retry_count):
+                    if self._enable_sdk():
                         self._enabled = True
                         return True
-                    if attempt < ENABLE_RETRY_COUNT - 1:
+                    if attempt < self._enable_retry_count - 1:
                         time.sleep(ENABLE_RETRY_INTERVAL)
                 return False
             if sdk.disable():
@@ -550,6 +564,15 @@ class NeroAdapter(ManipulatorAdapter):
             sdk.set_speed_percent(max(1, min(100, speed_percent)))
         except Exception:
             logger.exception("Failed to set NERO speed percent", speed_percent=speed_percent)
+
+    def _enable_sdk(self) -> bool:
+        sdk = self._sdk
+        if sdk is None:
+            return False
+        try:
+            return bool(sdk.enable(timeout=self._enable_call_timeout))
+        except TypeError:
+            return bool(sdk.enable())
 
     def _disconnect_sdk(self, sdk: Any) -> None:
         try:

@@ -32,6 +32,7 @@ class FakeNeroAdapter:
         self.address = kwargs["address"]
         self.calls: list[str] = []
         self.written_positions: list[list[float]] = []
+        self._motion_polls = 0
         FakeNeroAdapter.instances.append(self)
 
     def connect(self) -> bool:
@@ -46,6 +47,10 @@ class FakeNeroAdapter:
         self.calls.append("read_error")
         return 0, ""
 
+    def read_enabled(self) -> bool:
+        self.calls.append("read_enabled")
+        return True
+
     def read_joint_positions(self) -> list[float]:
         self.calls.append("read_joint_positions")
         return [0.0] * 7
@@ -57,7 +62,11 @@ class FakeNeroAdapter:
 
     def read_state(self) -> dict[str, int]:
         self.calls.append("read_state")
-        return {"motion_status": 0}
+        # Report "moving" on the first poll of each wait and "settled" on the
+        # next, so wait_for_motion observes a start->stop transition (and never
+        # needs to sleep while polling).
+        self._motion_polls += 1
+        return {"motion_status": 1 if self._motion_polls % 2 == 1 else 0}
 
     def disable(self) -> None:
         raise AssertionError("sample script must not disable NERO")
@@ -126,9 +135,12 @@ def test_joint4_script_uses_adapter_for_both_can_channels(script_module, monkeyp
             "firmware_version": "v120",
             "interface": "socketcan",
             "bitrate": 1_000_000,
+            "enable_retry_count": 1,
+            "enable_call_timeout": 0.2,
         }
         assert adapter.written_positions == [zero, delta, zero]
         assert "connect" in adapter.calls
         assert "activate" in adapter.calls
+        assert "read_enabled" in adapter.calls
         assert "read_joint_positions" in adapter.calls
         assert "read_state" in adapter.calls

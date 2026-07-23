@@ -37,6 +37,9 @@ FIRMWARE_VERSION = "v120"
 JOINT_INDEX = 3  # Joint 4 in zero-based Python indexing.
 DELTA_DEGREES = 45.0
 HOLD_SECONDS_AFTER_DELTA = 5.0
+ACTIVATE_TIMEOUT_S = 15.0
+MOTION_START_GRACE_POLLS = 20
+MOTION_POLL_INTERVAL_S = 0.05
 ZERO_JOINTS = [0.0] * NERO_DOF
 
 JOINT_LIMITS_RAD = [
@@ -51,28 +54,42 @@ JOINT_LIMITS_RAD = [
 
 
 def wait_for_motion(channel: str, adapter: NeroAdapter, timeout_s: float = 10.0) -> None:
+    # read_state() can briefly still report motion_status == 0 right after a
+    # command is sent, so first wait for motion to actually begin. Otherwise we
+    # would immediately (and wrongly) report "reached target" before the arm
+    # has started moving.
+    for _ in range(MOTION_START_GRACE_POLLS):
+        if adapter.read_state().get("motion_status", 0) != 0:
+            break
+        time.sleep(MOTION_POLL_INTERVAL_S)
+    else:
+        print(f"{channel}: no motion detected (already at target?)", flush=True)
+        return
+
     start_t = time.monotonic()
     while time.monotonic() - start_t < timeout_s:
-        state = adapter.read_state()
-        if state.get("motion_status") == 0:
-            print(f"{channel}: reached target position")
+        if adapter.read_state().get("motion_status", 0) == 0:
+            print(f"{channel}: reached target position", flush=True)
             return
-        time.sleep(0.1)
-    print(f"{channel}: wait for motion timeout ({timeout_s:.1f}s)")
+        time.sleep(MOTION_POLL_INTERVAL_S)
+    print(f"{channel}: wait for motion timeout ({timeout_s:.1f}s)", flush=True)
 
 
 def hold_enabled_until_interrupt(message: str) -> None:
-    print(message)
+    print(message, flush=True)
     while True:
         time.sleep(1.0)
 
 
 def connect_and_enable(channel: str) -> NeroAdapter:
+    print(f"{channel}: connecting NeroAdapter...", flush=True)
     adapter = NeroAdapter(
         address=channel,
         firmware_version=FIRMWARE_VERSION,
         interface="socketcan",
         bitrate=1_000_000,
+        enable_retry_count=1,
+        enable_call_timeout=0.2,
     )
     if not adapter.connect():
         error_code, error_message = adapter.read_error()
@@ -80,16 +97,37 @@ def connect_and_enable(channel: str) -> NeroAdapter:
             f"{channel}: failed to connect NERO adapter "
             f"(error_code={error_code}, error={error_message!r})"
         )
+    print(f"{channel}: connected; activating servos...", flush=True)
 
+    start_t = time.monotonic()
+    last_report_t = 0.0
     while not adapter.activate():
-        print(f"{channel}: waiting for NERO adapter activate...")
+        now = time.monotonic()
+        if time.monotonic() - start_t > ACTIVATE_TIMEOUT_S:
+            error_code, error_message = adapter.read_error()
+            raise RuntimeError(
+                f"{channel}: timed out activating NERO adapter after "
+                f"{ACTIVATE_TIMEOUT_S:.1f}s "
+                f"(enabled={adapter.read_enabled()}, state={adapter.read_state()}, "
+                f"error_code={error_code}, error={error_message!r})"
+            )
+        if now - last_report_t >= 1.0:
+            error_code, error_message = adapter.read_error()
+            print(
+                f"{channel}: waiting for NERO adapter activate "
+                f"(enabled={adapter.read_enabled()}, state={adapter.read_state()}, "
+                f"error_code={error_code}, error={error_message!r})",
+                flush=True,
+            )
+            last_report_t = now
         time.sleep(0.1)
+    print(f"{channel}: activated; enabled={adapter.read_enabled()}", flush=True)
     return adapter
 
 
 def move_joint4_delta(channel: str, adapter: NeroAdapter) -> None:
     joints = adapter.read_joint_positions()
-    print(f"{channel}: current joints:", joints)
+    print(f"{channel}: current joints:", joints, flush=True)
 
     joints[JOINT_INDEX] += math.radians(DELTA_DEGREES)
     lower, upper = JOINT_LIMITS_RAD[JOINT_INDEX]
@@ -98,7 +136,7 @@ def move_joint4_delta(channel: str, adapter: NeroAdapter) -> None:
             f"{channel}: joint 4 target {joints[JOINT_INDEX]:.3f} rad is outside "
             f"NERO limits [{lower:.3f}, {upper:.3f}] rad"
         )
-    print(f"{channel}: target joints:", joints)
+    print(f"{channel}: target joints:", joints, flush=True)
 
     if not adapter.write_joint_positions(joints):
         raise RuntimeError(f"{channel}: failed to command target joints through adapter")
@@ -106,7 +144,7 @@ def move_joint4_delta(channel: str, adapter: NeroAdapter) -> None:
 
 def command_zero(adapters: dict[str, NeroAdapter]) -> None:
     for channel, adapter in adapters.items():
-        print(f"{channel}: sending zero target")
+        print(f"{channel}: sending zero target", flush=True)
         if not adapter.write_joint_positions(ZERO_JOINTS):
             raise RuntimeError(f"{channel}: failed to command zero target through adapter")
     for channel, adapter in adapters.items():

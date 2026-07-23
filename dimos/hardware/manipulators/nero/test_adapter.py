@@ -163,10 +163,10 @@ def test_agx_gripper_init_and_read_write_mapping() -> None:
     sdk = FakeNeroSdk()
     adapter = NeroAdapter(effector_type="agx_gripper", gripper_force=1.5)
 
-    adapter._effector = adapter._init_effector(sdk)
     sdk.connect()
+    adapter._effector = adapter._init_effector(sdk)
 
-    assert sdk.events == ["init_effector:agx_gripper", "connect"]
+    assert sdk.events == ["connect", "init_effector:agx_gripper"]
     assert adapter.read_gripper_position() == 0.035
     assert adapter.write_gripper_position(0.04)
     assert sdk.effector.move_gripper_m_calls == [(0.04, 1.5)]
