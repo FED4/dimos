@@ -19,6 +19,8 @@ Notes:
   joint positions, even when only changing one joint.
 - Do not call disable() while the arm is raised. AgileX documents that disabled
   NERO joints can drop immediately because servo holding torque is removed.
+- This script intentionally keeps the SDK connection open after the move. Stop
+  it with Ctrl+C only when the arm is physically safe.
 """
 
 from __future__ import annotations
@@ -33,7 +35,6 @@ CAN_CHANNEL = "can0"
 FIRMWARE = NeroFW.V120
 JOINT_INDEX = 3  # Joint 4 in zero-based Python indexing.
 DELTA_DEGREES = 45.0
-HOLD_AFTER_MOVE = True
 
 JOINT_LIMITS_RAD = [
     (-2.705261, 2.705261),
@@ -92,13 +93,13 @@ def main() -> None:
                 break
             time.sleep(0.1)
 
-        if HOLD_AFTER_MOVE:
-            input("Arm is still enabled and holding position. Press Enter to disconnect...")
+        print("Arm is still enabled, connected, and holding position.")
+        print("Leave this process running during the test. Press Ctrl+C only when safe.")
+        while True:
+            time.sleep(1.0)
 
-    finally:
-        # Disconnect only stops the SDK communication resources. Calling disable()
-        # here would power off the joints and can make a raised arm drop.
-        robot.disconnect()
+    except KeyboardInterrupt:
+        print("Exiting without disable() or disconnect().")
 
 
 if __name__ == "__main__":
