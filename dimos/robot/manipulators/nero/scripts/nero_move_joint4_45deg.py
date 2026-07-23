@@ -19,8 +19,9 @@ Notes:
   joint positions, even when only changing one joint.
 - Do not call disable() while the arm is raised. AgileX documents that disabled
   NERO joints can drop immediately because servo holding torque is removed.
-- This script intentionally keeps the SDK connection open after the move. Stop
-  it with Ctrl+C only when the arm is physically safe.
+- This script intentionally keeps the SDK connection open after the move.
+  Press Ctrl+C once to command the arm back to zero. After zero is reached, the
+  script keeps holding enabled/connected; press Ctrl+C again only when safe.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ CAN_CHANNEL = "can0"
 FIRMWARE = NeroFW.V120
 JOINT_INDEX = 3  # Joint 4 in zero-based Python indexing.
 DELTA_DEGREES = 45.0
+ZERO_JOINTS = [0.0] * 7
 
 JOINT_LIMITS_RAD = [
     (-2.705261, 2.705261),
@@ -45,6 +47,23 @@ JOINT_LIMITS_RAD = [
     (-0.733039, 0.959932),
     (-1.570797, 1.570797),
 ]
+
+
+def wait_for_motion(robot, timeout_s: float = 10.0) -> None:
+    start_t = time.monotonic()
+    while time.monotonic() - start_t < timeout_s:
+        status = robot.get_arm_status()
+        if status is not None and status.msg.motion_status == 0:
+            print("Reached target position")
+            return
+        time.sleep(0.1)
+    print(f"Wait for motion timeout ({timeout_s:.1f}s)")
+
+
+def hold_enabled_until_interrupt(message: str) -> None:
+    print(message)
+    while True:
+        time.sleep(1.0)
 
 
 def main() -> None:
@@ -59,6 +78,7 @@ def main() -> None:
     robot = AgxArmFactory.create_arm(cfg)
     robot.connect()
 
+    enabled = False
     try:
         if robot.has_comm_error():
             raise RuntimeError(f"CAN communication error: {robot.get_comm_error()}")
@@ -66,6 +86,7 @@ def main() -> None:
         while not robot.enable():
             print("Waiting for NERO enable...")
             time.sleep(0.1)
+        enabled = True
 
         joint_msg = robot.get_joint_angles()
         if joint_msg is None:
@@ -84,22 +105,27 @@ def main() -> None:
         print("Target joints:", joints)
 
         robot.move_j(joints)
+        wait_for_motion(robot)
 
-        start_t = time.monotonic()
-        while time.monotonic() - start_t < 10.0:
-            status = robot.get_arm_status()
-            if status is not None and status.msg.motion_status == 0:
-                print("Reached target position")
-                break
-            time.sleep(0.1)
-
-        print("Arm is still enabled, connected, and holding position.")
-        print("Leave this process running during the test. Press Ctrl+C only when safe.")
-        while True:
-            time.sleep(1.0)
+        hold_enabled_until_interrupt(
+            "Arm is enabled, connected, and holding position. "
+            "Press Ctrl+C to command zero."
+        )
 
     except KeyboardInterrupt:
-        print("Exiting without disable() or disconnect().")
+        if not enabled:
+            print("Interrupted before enable completed. No zero command was sent.")
+            return
+        print("Returning to zero while staying enabled.")
+        robot.move_j(ZERO_JOINTS)
+        wait_for_motion(robot)
+        try:
+            hold_enabled_until_interrupt(
+                "Zero target sent. Arm is still enabled and connected. "
+                "Press Ctrl+C again only when safe to exit this process."
+            )
+        except KeyboardInterrupt:
+            print("Exiting without disable() or disconnect().")
 
 
 if __name__ == "__main__":
