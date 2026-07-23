@@ -150,7 +150,11 @@ class NeroAdapter(ManipulatorAdapter):
         return False
 
     def disconnect(self) -> None:
-        """Disable and disconnect the arm."""
+        """Disconnect SDK communication resources.
+
+        NERO joints are not disabled by default because disabling removes servo
+        holding torque and can make a raised arm drop.
+        """
         sdk = self._sdk
         if sdk is None:
             self._clear_connection_state()
