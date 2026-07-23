@@ -28,6 +28,8 @@ class FakeNeroSdk:
         self.move_cpv_vel_calls: list[tuple[int, float]] = []
         self.speed_percent: list[int] = []
         self.events: list[str] = []
+        self.disable_calls = 0
+        self.disconnect_calls = 0
         self.effector = FakeAgxGripper()
         self.OPTIONS = SimpleNamespace(
             EFFECTOR=SimpleNamespace(AGX_GRIPPER="agx_gripper")
@@ -39,6 +41,13 @@ class FakeNeroSdk:
 
     def connect(self) -> None:
         self.events.append("connect")
+
+    def disable(self) -> bool:
+        self.disable_calls += 1
+        return True
+
+    def disconnect(self) -> None:
+        self.disconnect_calls += 1
 
     def set_motion_mode(self, motion_mode: str) -> None:
         self.motion_modes.append(motion_mode)
@@ -161,3 +170,31 @@ def test_agx_gripper_init_and_read_write_mapping() -> None:
     assert adapter.read_gripper_position() == 0.035
     assert adapter.write_gripper_position(0.04)
     assert sdk.effector.move_gripper_m_calls == [(0.04, 1.5)]
+
+
+def test_disconnect_does_not_disable_by_default() -> None:
+    sdk = FakeNeroSdk()
+    adapter = NeroAdapter()
+    adapter._sdk = sdk
+    adapter._connected = True
+    adapter._enabled = True
+
+    adapter.disconnect()
+
+    assert sdk.disable_calls == 0
+    assert sdk.disconnect_calls == 1
+    assert not adapter.is_connected()
+
+
+def test_disconnect_can_disable_when_explicitly_configured() -> None:
+    sdk = FakeNeroSdk()
+    adapter = NeroAdapter(disable_on_disconnect=True)
+    adapter._sdk = sdk
+    adapter._connected = True
+    adapter._enabled = True
+
+    adapter.disconnect()
+
+    assert sdk.disable_calls == 1
+    assert sdk.disconnect_calls == 1
+    assert not adapter.is_connected()
