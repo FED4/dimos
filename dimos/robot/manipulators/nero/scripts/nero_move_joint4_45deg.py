@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Connect to an AgileX NERO arm and move joint 2 by +45 degrees.
+"""Connect to an AgileX NERO arm and move joint 4 by +45 degrees.
 
 How to run:
 1. Bring up the CAN interface, for example:
@@ -10,7 +10,7 @@ How to run:
    script.
 
 3. Run from the repository root:
-   python3 dimos/robot/manipulators/nero/scripts/nero_move_joint2_45deg.py
+   python3 dimos/robot/manipulators/nero/scripts/nero_move_joint4_45deg.py
 
 Notes:
 - Change CAN_CHANNEL if your arm is on can1 or another CAN interface.
@@ -31,7 +31,7 @@ from pyAgxArm import AgxArmFactory, ArmModel, NeroFW, create_agx_arm_config
 
 CAN_CHANNEL = "can0"
 FIRMWARE = NeroFW.V120
-JOINT_INDEX = 1  # Joint 2 in zero-based Python indexing.
+JOINT_INDEX = 3  # Joint 4 in zero-based Python indexing.
 DELTA_DEGREES = 45.0
 HOLD_AFTER_MOVE = True
 
@@ -77,7 +77,7 @@ def main() -> None:
         lower, upper = JOINT_LIMITS_RAD[JOINT_INDEX]
         if not lower <= joints[JOINT_INDEX] <= upper:
             raise RuntimeError(
-                f"Joint 2 target {joints[JOINT_INDEX]:.3f} rad is outside "
+                f"Joint 4 target {joints[JOINT_INDEX]:.3f} rad is outside "
                 f"NERO limits [{lower:.3f}, {upper:.3f}] rad"
             )
         print("Target joints:", joints)
