@@ -44,6 +44,7 @@ CPV_MOTION_MODE = "cpv"
 JOINT_MOTION_MODE = "j"
 AGX_GRIPPER_EFFECTOR = "agx_gripper"
 DEFAULT_GRIPPER_FORCE = 1.0
+DEFAULT_DISABLE_ON_DISCONNECT = False
 
 DEFAULT_JOINT_LIMITS = JointLimits(
     position_lower=[
@@ -82,6 +83,7 @@ class NeroAdapter(ManipulatorAdapter):
         speed_percent: int = DEFAULT_SPEED_PERCENT,
         effector_type: str | None = None,
         gripper_force: float = DEFAULT_GRIPPER_FORCE,
+        disable_on_disconnect: bool = DEFAULT_DISABLE_ON_DISCONNECT,
         **sdk_kwargs: object,
     ) -> None:
         if dof != NERO_DOF:
@@ -95,6 +97,7 @@ class NeroAdapter(ManipulatorAdapter):
         self._speed_percent = speed_percent
         self._effector_type = effector_type
         self._gripper_force = gripper_force
+        self._disable_on_disconnect = disable_on_disconnect
         self._sdk_kwargs = sdk_kwargs
         self._sdk: Any | None = None
         self._effector: Any | None = None
@@ -153,11 +156,11 @@ class NeroAdapter(ManipulatorAdapter):
             self._clear_connection_state()
             return
 
-        try:
-            if self._enabled:
+        if self._enabled and self._disable_on_disconnect:
+            try:
                 sdk.disable()
-        except Exception:
-            logger.exception("Failed to disable NERO during disconnect")
+            except Exception:
+                logger.exception("Failed to disable NERO during disconnect")
 
         self._disconnect_sdk(sdk)
         self._clear_connection_state()

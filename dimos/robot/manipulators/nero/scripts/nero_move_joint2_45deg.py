@@ -17,6 +17,8 @@ Notes:
 - Change FIRMWARE to match your NERO firmware.
 - This sends a full 7-joint move_j target because the AgileX SDK expects all
   joint positions, even when only changing one joint.
+- Do not call disable() while the arm is raised. AgileX documents that disabled
+  NERO joints can drop immediately because servo holding torque is removed.
 """
 
 from __future__ import annotations
@@ -31,6 +33,17 @@ CAN_CHANNEL = "can0"
 FIRMWARE = NeroFW.V120
 JOINT_INDEX = 1  # Joint 2 in zero-based Python indexing.
 DELTA_DEGREES = 45.0
+HOLD_AFTER_MOVE = True
+
+JOINT_LIMITS_RAD = [
+    (-2.705261, 2.705261),
+    (-1.745330, 1.745330),
+    (-2.757621, 2.757621),
+    (-1.012291, 2.146755),
+    (-2.757621, 2.757621),
+    (-0.733039, 0.959932),
+    (-1.570797, 1.570797),
+]
 
 
 def main() -> None:
@@ -61,13 +74,30 @@ def main() -> None:
         print("Current joints:", joints)
 
         joints[JOINT_INDEX] += math.radians(DELTA_DEGREES)
+        lower, upper = JOINT_LIMITS_RAD[JOINT_INDEX]
+        if not lower <= joints[JOINT_INDEX] <= upper:
+            raise RuntimeError(
+                f"Joint 2 target {joints[JOINT_INDEX]:.3f} rad is outside "
+                f"NERO limits [{lower:.3f}, {upper:.3f}] rad"
+            )
         print("Target joints:", joints)
 
         robot.move_j(joints)
-        time.sleep(3.0)
+
+        start_t = time.monotonic()
+        while time.monotonic() - start_t < 10.0:
+            status = robot.get_arm_status()
+            if status is not None and status.msg.motion_status == 0:
+                print("Reached target position")
+                break
+            time.sleep(0.1)
+
+        if HOLD_AFTER_MOVE:
+            input("Arm is still enabled and holding position. Press Enter to disconnect...")
 
     finally:
-        robot.disable()
+        # Disconnect only stops the SDK communication resources. Calling disable()
+        # here would power off the joints and can make a raised arm drop.
         robot.disconnect()
 
 
