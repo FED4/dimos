@@ -1,28 +1,27 @@
 #!/usr/bin/env python3
 
-"""Connect to AgileX NERO arms on can0/can1 and move joint 4 by +45 degrees.
+"""Use DimOS NeroAdapter to move joint 4 by +45 degrees on can0/can1.
 
 How to run:
 1. Bring up the CAN interface, for example:
    sudo ip link set can0 up type can bitrate 1000000
    sudo ip link set can1 up type can bitrate 1000000
 
-2. Make sure pyAgxArm is installed in the Python environment you use to run this
-   script.
+2. Make sure DimOS and pyAgxArm are installed in the Python environment you use
+   to run this script.
 
 3. Run from the repository root:
    python3 dimos/robot/manipulators/nero/scripts/nero_move_joint4_45deg.py
 
 Notes:
 - Change CAN_CHANNELS if your arms use different CAN interfaces.
-- Change FIRMWARE to match your NERO firmware.
-- This sends a full 7-joint move_j target because the AgileX SDK expects all
-  joint positions, even when only changing one joint.
+- Change FIRMWARE_VERSION to match your NERO firmware.
+- This script goes through the DimOS NeroAdapter instead of calling pyAgxArm
+  motion APIs directly.
 - Do not call disable() while the arm is raised. AgileX documents that disabled
   NERO joints can drop immediately because servo holding torque is removed.
-- This script intentionally keeps the SDK connection open after the move.
-  Press Ctrl+C once to command the arm back to zero. After zero is reached, the
-  script keeps holding enabled/connected; press Ctrl+C again only when safe.
+- Motion sequence: command zero first, move joint 4 by +45 degrees, wait 5
+  seconds, command zero again, then keep the SDK connection open.
 """
 
 from __future__ import annotations
@@ -30,14 +29,15 @@ from __future__ import annotations
 import math
 import time
 
-from pyAgxArm import AgxArmFactory, ArmModel, NeroFW, create_agx_arm_config
+from dimos.hardware.manipulators.nero.adapter import NERO_DOF, NeroAdapter
 
 
 CAN_CHANNELS = ["can0", "can1"]
-FIRMWARE = NeroFW.V120
+FIRMWARE_VERSION = "v120"
 JOINT_INDEX = 3  # Joint 4 in zero-based Python indexing.
 DELTA_DEGREES = 45.0
-ZERO_JOINTS = [0.0] * 7
+HOLD_SECONDS_AFTER_DELTA = 5.0
+ZERO_JOINTS = [0.0] * NERO_DOF
 
 JOINT_LIMITS_RAD = [
     (-2.705261, 2.705261),
@@ -50,11 +50,11 @@ JOINT_LIMITS_RAD = [
 ]
 
 
-def wait_for_motion(channel: str, robot, timeout_s: float = 10.0) -> None:
+def wait_for_motion(channel: str, adapter: NeroAdapter, timeout_s: float = 10.0) -> None:
     start_t = time.monotonic()
     while time.monotonic() - start_t < timeout_s:
-        status = robot.get_arm_status()
-        if status is not None and status.msg.motion_status == 0:
+        state = adapter.read_state()
+        if state.get("motion_status") == 0:
             print(f"{channel}: reached target position")
             return
         time.sleep(0.1)
@@ -67,36 +67,28 @@ def hold_enabled_until_interrupt(message: str) -> None:
         time.sleep(1.0)
 
 
-def create_robot(channel: str):
-    cfg = create_agx_arm_config(
-        robot=ArmModel.NERO,
-        firmeware_version=FIRMWARE,
+def connect_and_enable(channel: str) -> NeroAdapter:
+    adapter = NeroAdapter(
+        address=channel,
+        firmware_version=FIRMWARE_VERSION,
         interface="socketcan",
-        channel=channel,
         bitrate=1_000_000,
     )
-    return AgxArmFactory.create_arm(cfg)
+    if not adapter.connect():
+        error_code, error_message = adapter.read_error()
+        raise RuntimeError(
+            f"{channel}: failed to connect NERO adapter "
+            f"(error_code={error_code}, error={error_message!r})"
+        )
 
-
-def connect_and_enable(channel: str):
-    robot = create_robot(channel)
-    robot.connect()
-
-    if robot.has_comm_error():
-        raise RuntimeError(f"{channel}: CAN communication error: {robot.get_comm_error()}")
-
-    while not robot.enable():
-        print(f"{channel}: waiting for NERO enable...")
+    while not adapter.activate():
+        print(f"{channel}: waiting for NERO adapter activate...")
         time.sleep(0.1)
-    return robot
+    return adapter
 
 
-def move_joint4_delta(channel: str, robot) -> None:
-    joint_msg = robot.get_joint_angles()
-    if joint_msg is None:
-        raise RuntimeError(f"{channel}: could not read current joint angles")
-
-    joints = [float(joint) for joint in joint_msg.msg]
+def move_joint4_delta(channel: str, adapter: NeroAdapter) -> None:
+    joints = adapter.read_joint_positions()
     print(f"{channel}: current joints:", joints)
 
     joints[JOINT_INDEX] += math.radians(DELTA_DEGREES)
@@ -108,44 +100,48 @@ def move_joint4_delta(channel: str, robot) -> None:
         )
     print(f"{channel}: target joints:", joints)
 
-    robot.move_j(joints)
+    if not adapter.write_joint_positions(joints):
+        raise RuntimeError(f"{channel}: failed to command target joints through adapter")
+
+
+def command_zero(adapters: dict[str, NeroAdapter]) -> None:
+    for channel, adapter in adapters.items():
+        print(f"{channel}: sending zero target")
+        if not adapter.write_joint_positions(ZERO_JOINTS):
+            raise RuntimeError(f"{channel}: failed to command zero target through adapter")
+    for channel, adapter in adapters.items():
+        wait_for_motion(channel, adapter)
 
 
 def main() -> None:
-    robots: dict[str, object] = {}
+    adapters: dict[str, NeroAdapter] = {}
 
     try:
         for channel in CAN_CHANNELS:
-            robots[channel] = connect_and_enable(channel)
+            adapters[channel] = connect_and_enable(channel)
 
-        for channel, robot in robots.items():
-            move_joint4_delta(channel, robot)
+        print("Commanding zero before test motion.")
+        command_zero(adapters)
 
-        for channel, robot in robots.items():
-            wait_for_motion(channel, robot)
+        for channel, adapter in adapters.items():
+            move_joint4_delta(channel, adapter)
+
+        for channel, adapter in adapters.items():
+            wait_for_motion(channel, adapter)
+
+        print(f"Holding +{DELTA_DEGREES:.1f} deg target for {HOLD_SECONDS_AFTER_DELTA:.1f}s.")
+        time.sleep(HOLD_SECONDS_AFTER_DELTA)
+
+        print("Commanding zero after test motion.")
+        command_zero(adapters)
 
         hold_enabled_until_interrupt(
-            "Arms are enabled, connected, and holding position. "
-            "Press Ctrl+C to command zero."
+            "Zero target sent. Arms are enabled, connected, and holding position. "
+            "Press Ctrl+C only when safe to exit this process."
         )
 
     except KeyboardInterrupt:
-        if not robots:
-            print("Interrupted before enable completed. No zero command was sent.")
-            return
-        print("Returning connected arms to zero while staying enabled.")
-        for channel, robot in robots.items():
-            print(f"{channel}: sending zero target")
-            robot.move_j(ZERO_JOINTS)
-        for channel, robot in robots.items():
-            wait_for_motion(channel, robot)
-        try:
-            hold_enabled_until_interrupt(
-                "Zero target sent. Arms are still enabled and connected. "
-                "Press Ctrl+C again only when safe to exit this process."
-            )
-        except KeyboardInterrupt:
-            print("Exiting without disable() or disconnect().")
+        print("Exiting without disable() or disconnect().")
 
 
 if __name__ == "__main__":
