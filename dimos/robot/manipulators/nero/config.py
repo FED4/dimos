@@ -25,30 +25,51 @@ from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.robot.manipulators._modeling import base_pose, coordinator_joint_mapping
 from dimos.utils.data import LfsPath
 
+NERO_DIR = Path(__file__).parent
+NERO_ASSETS_DIR = NERO_DIR / "assets"
+NERO_LOCAL_AGX_ARM_DESCRIPTION = NERO_ASSETS_DIR / "agx_arm_description"
+NERO_LOCAL_WBCD_URDF = NERO_ASSETS_DIR / "wbcd_urdf"
+NERO_LOCAL_REALSENSE2_DESCRIPTION = NERO_ASSETS_DIR / "realsense2_description"
+
 NERO_DOF = 7
 NERO_LEFT_CAN = "can0"
 NERO_RIGHT_CAN = "can1"
 NERO_FIRMWARE_VERSION = "v120"
 NERO_AGX_GRIPPER = "agx_gripper"
 
-# Single-arm URDF used by Pinocchio IK and planning per-arm.
+# Single-arm URDF/Xacro used by Pinocchio IK and planning per-arm.
 # Each arm gets its own RobotModelConfig with this URDF, placed at
 # different base_pose offsets (same pattern as dual_xarm6_planner).
-# Prefer a future DimOS LFS package when present, then fall back to the
-# AgileX package layouts commonly used on the development robot.
+# The selected model includes the AGX gripper for visualization/collision,
+# while planning still controls only the seven arm joints.
 AGX_ARM_DESCRIPTION_PKG = LfsPath("agx_arm_description")
 AGX_ARM_URDF_PKG = LfsPath("agx_arm_urdf")
-NERO_MODEL_RELATIVE_PATH = Path("agx_arm_urdf/nero/urdf/nero_description.urdf")
+NERO_MODEL_RELATIVE_PATH = Path("agx_arm_urdf/nero/urdf/nero_with_gripper_description.xacro")
 NERO_MODEL_PATH = AGX_ARM_DESCRIPTION_PKG / NERO_MODEL_RELATIVE_PATH
 NERO_MODEL_PATH_FALLBACKS = (
+    NERO_LOCAL_AGX_ARM_DESCRIPTION / NERO_MODEL_RELATIVE_PATH,
     Path.home()
     / "wbcd_extracted/agx_arm_sim/agx_arm_description"
     / NERO_MODEL_RELATIVE_PATH,
-    AGX_ARM_URDF_PKG / "nero/urdf/nero_description.urdf",
-    Path.home() / "agx_arm_urdf/nero/urdf/nero_description.urdf",
+    Path.home() / "agx_arm_urdf/nero/urdf/nero_with_gripper_description.xacro",
 )
-NERO_PACKAGE_PATHS: dict[str, Path] = {"agx_arm_description": AGX_ARM_DESCRIPTION_PKG}
+NERO_MODEL_LFS_FALLBACKS = (
+    NERO_MODEL_PATH,
+    AGX_ARM_URDF_PKG / "nero/urdf/nero_with_gripper_description.xacro",
+)
+NERO_PACKAGE_PATHS: dict[str, Path] = {
+    "agx_arm_description": NERO_LOCAL_AGX_ARM_DESCRIPTION,
+    "wbcd_urdf": NERO_LOCAL_WBCD_URDF,
+    "realsense2_description": NERO_LOCAL_REALSENSE2_DESCRIPTION,
+}
 NERO_HOME_JOINTS = [0.0] * NERO_DOF
+NERO_GRIPPER_COLLISION_EXCLUSIONS: list[tuple[str, str]] = [
+    ("link7", "gripper_flange"),
+    ("gripper_flange", "gripper_base"),
+    ("gripper_base", "gripper_link1"),
+    ("gripper_base", "gripper_link2"),
+    ("gripper_link1", "gripper_link2"),
+]
 
 # Physical placement of each arm on the massage robot chassis, copied from
 # wbcd_urdf/urdf/dual_nero.xacro left_arm_joint/right_arm_joint.
@@ -113,27 +134,29 @@ def nero_real_hardware(
 
 def _nero_urdf_path() -> Path:
     """Resolve the single-arm Nero URDF from LFS or a local AgileX checkout."""
-    if NERO_MODEL_PATH.exists():
-        return NERO_MODEL_PATH
     for path in NERO_MODEL_PATH_FALLBACKS:
         if path.exists():
             return path
-    # Return the LFS path regardless; error will surface at planner startup.
+    # Return the preferred LFS path without touching .exists(); LfsPath.exists()
+    # triggers git-lfs, but local sim mode should work without git-lfs installed.
     return NERO_MODEL_PATH
 
 
 def _nero_package_paths() -> dict[str, Path]:
-    """Resolve package://agx_arm_description paths used inside the Nero URDF."""
-    candidates = (
-        AGX_ARM_DESCRIPTION_PKG,
-        Path.home() / "wbcd_extracted/agx_arm_sim/agx_arm_description",
-        AGX_ARM_URDF_PKG.parent,
-        Path.home(),
-    )
-    for path in candidates:
-        if (path / NERO_MODEL_RELATIVE_PATH).exists():
-            return {"agx_arm_description": path}
-    return dict(NERO_PACKAGE_PATHS)
+    """Resolve package:// paths used by the NERO, gripper, and camera models."""
+    if (NERO_LOCAL_AGX_ARM_DESCRIPTION / NERO_MODEL_RELATIVE_PATH).exists():
+        return dict(NERO_PACKAGE_PATHS)
+
+    extracted_root = Path.home() / "wbcd_extracted"
+    extracted_packages = {
+        "agx_arm_description": extracted_root / "agx_arm_sim/agx_arm_description",
+        "wbcd_urdf": extracted_root / "wbcd_urdf",
+        "realsense2_description": extracted_root / "agx_arm_sim/realsense2_description",
+    }
+    if (extracted_packages["agx_arm_description"] / NERO_MODEL_RELATIVE_PATH).exists():
+        return extracted_packages
+
+    return {"agx_arm_description": AGX_ARM_DESCRIPTION_PKG}
 
 
 def nero_model_config(
@@ -191,6 +214,7 @@ def nero_model_config(
         ],
         package_paths=_nero_package_paths(),
         auto_convert_meshes=True,
+        collision_exclusion_pairs=NERO_GRIPPER_COLLISION_EXCLUSIONS,
         joint_name_mapping=coordinator_joint_mapping(
             name,
             NERO_DOF,
