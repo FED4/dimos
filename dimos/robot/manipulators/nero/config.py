@@ -31,10 +31,26 @@ NERO_RIGHT_CAN = "can1"
 NERO_FIRMWARE_VERSION = "v120"
 NERO_AGX_GRIPPER = "agx_gripper"
 
+# Single-arm URDF used by Pinocchio IK and planning per-arm.
+# Each arm gets its own RobotModelConfig with this URDF, placed at
+# different base_pose offsets (same pattern as dual_xarm6_planner).
+# The LfsPath resolves once the agx_arm_urdf LFS package is pulled;
+# NERO_MODEL_PATH_FALLBACK points to the local sim workspace copy.
 AGX_ARM_URDF_PKG = LfsPath("agx_arm_urdf")
 NERO_MODEL_PATH = AGX_ARM_URDF_PKG / "nero/urdf/nero_description.urdf"
+NERO_MODEL_PATH_FALLBACK = Path(
+    "/home/nathan/Documents/adventurex/sim_vis_ws/src/agx_arm_sim"
+    "/agx_arm_description/agx_arm_urdf/nero/urdf/nero_description.urdf"
+)
 NERO_PACKAGE_PATHS: dict[str, Path] = {"agx_arm_urdf": AGX_ARM_URDF_PKG}
 NERO_HOME_JOINTS = [0.0] * NERO_DOF
+
+# Physical placement of each arm on the massage robot chassis.
+# Left arm is at +Y, right arm at -Y, both at the same height.
+# Adjust these to match your physical mount geometry.
+NERO_LEFT_BASE_Y = 0.1    # metres
+NERO_RIGHT_BASE_Y = -0.1  # metres
+NERO_BASE_Z = 0.59        # metres (from wbcd dual_nero.xacro joint origin)
 
 
 def nero_joints(hardware_id: str) -> list[str]:
@@ -88,17 +104,44 @@ def nero_real_hardware(
     )
 
 
+def _nero_urdf_path() -> Path:
+    """Resolve the single-arm Nero URDF: LFS package if available, else fallback."""
+    if NERO_MODEL_PATH.exists():
+        return NERO_MODEL_PATH
+    if NERO_MODEL_PATH_FALLBACK.exists():
+        return NERO_MODEL_PATH_FALLBACK
+    # Return the LFS path regardless; error will surface at planner startup.
+    return NERO_MODEL_PATH
+
+
 def nero_model_config(
     name: str,
     *,
+    y_offset: float = 0.0,
+    z_offset: float = 0.0,
     joint_prefix: str | None = None,
     coordinator_task_name: str | None = None,
 ) -> RobotModelConfig:
+    """Return a per-arm RobotModelConfig for the NERO 7-DOF arm.
+
+    Each arm uses the single-arm URDF placed at the given base_pose offset.
+    For dual-arm setups pass y_offset / z_offset to position each arm
+    relative to the world origin (same pattern as dual_xarm6_planner).
+
+    Args:
+        name: Robot name, e.g. "left_arm" or "right_arm".
+        y_offset: Y translation of the arm base in metres.
+        z_offset: Z translation of the arm base in metres.
+        joint_prefix: Override the joint-name prefix used in the coordinator
+            joint mapping. Defaults to ``"<name>/"``.
+        coordinator_task_name: Override the trajectory task name. Defaults to
+            ``"traj_<name>"``.
+    """
     local_joint_names = [f"joint{i}" for i in range(1, NERO_DOF + 1)]
     return RobotModelConfig(
         name=name,
-        model_path=NERO_MODEL_PATH,
-        base_pose=base_pose(),
+        model_path=_nero_urdf_path(),
+        base_pose=base_pose(y=y_offset, z=z_offset),
         joint_names=local_joint_names,
         base_link="base_link",
         planning_groups=[

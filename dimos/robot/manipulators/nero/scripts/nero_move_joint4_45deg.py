@@ -27,6 +27,8 @@ Notes:
 from __future__ import annotations
 
 import math
+import subprocess
+import sys
 import time
 
 from dimos.hardware.manipulators.nero.adapter import NERO_DOF, NeroAdapter
@@ -81,6 +83,72 @@ def hold_enabled_until_interrupt(message: str) -> None:
         time.sleep(1.0)
 
 
+def _diagnose_can(channels: list[str]) -> None:
+    """Print CAN interface state and raw traffic before attempting SDK connect."""
+    print("\n--- CAN DIAGNOSTICS ---", flush=True)
+
+    # 1. Interface state via ip link
+    for ch in channels:
+        try:
+            result = subprocess.run(
+                ["ip", "-details", "link", "show", ch],
+                capture_output=True, text=True, timeout=3,
+            )
+            state_line = next(
+                (l for l in result.stdout.splitlines() if "state" in l.lower()), ""
+            )
+            print(f"  {ch} ip link: {state_line.strip()}", flush=True)
+        except Exception as e:
+            print(f"  {ch} ip link failed: {e}", flush=True)
+
+    # 2. python-can open check
+    try:
+        import can
+        for ch in channels:
+            try:
+                bus = can.Bus(channel=ch, interface="socketcan", bitrate=1_000_000)
+                print(f"  {ch} python-can open: OK", flush=True)
+
+                # 3. Listen for up to 1 second for any CAN frame from the arm
+                print(f"  {ch} listening 1s for CAN frames from arm...", flush=True)
+                deadline = time.monotonic() + 1.0
+                frames_seen = 0
+                while time.monotonic() < deadline:
+                    msg = bus.recv(timeout=max(0, deadline - time.monotonic()))
+                    if msg is not None:
+                        frames_seen += 1
+                        print(
+                            f"  {ch} frame: id=0x{msg.arbitration_id:03X} "
+                            f"dlc={msg.dlc} data={msg.data.hex()}",
+                            flush=True,
+                        )
+                        if frames_seen >= 5:
+                            print(f"  {ch} (stopping after 5 frames)", flush=True)
+                            break
+                if frames_seen == 0:
+                    print(
+                        f"  {ch} NO frames received — arm may be powered off, "
+                        f"wrong bitrate, or wrong CAN channel.",
+                        flush=True,
+                    )
+                bus.shutdown()
+            except Exception as e:
+                print(f"  {ch} python-can error: {e}", flush=True)
+    except ImportError:
+        print("  python-can not installed — skipping raw CAN check", flush=True)
+
+    # 4. pyAgxArm availability
+    try:
+        from pyAgxArm import AgxArmFactory, create_agx_arm_config
+        print(f"  pyAgxArm: OK (AgxArmFactory importable)", flush=True)
+    except ImportError as e:
+        print(f"  pyAgxArm: MISSING — {e}", flush=True)
+        print("  Fix: uv pip install ../pyAgxArm   (from dimos/ directory)", flush=True)
+        sys.exit(1)
+
+    print("--- END DIAGNOSTICS ---\n", flush=True)
+
+
 def connect_and_enable(channel: str) -> NeroAdapter:
     print(f"{channel}: connecting NeroAdapter...", flush=True)
     adapter = NeroAdapter(
@@ -91,8 +159,34 @@ def connect_and_enable(channel: str) -> NeroAdapter:
         enable_retry_count=1,
         enable_call_timeout=0.2,
     )
-    if not adapter.connect():
+
+    # Verbose connect: patch in extra prints around what the adapter does
+    print(f"{channel}: calling sdk.connect()...", flush=True)
+    connected = adapter.connect()
+    if not connected:
         error_code, error_message = adapter.read_error()
+        # Try to get more info directly from the SDK
+        sdk = adapter._sdk
+        if sdk is not None:
+            try:
+                has_err = sdk.has_comm_error() if hasattr(sdk, "has_comm_error") else "N/A"
+                comm_err = sdk.get_comm_error() if hasattr(sdk, "has_comm_error") else "N/A"
+                is_conn = sdk.is_connected() if hasattr(sdk, "is_connected") else "N/A"
+                print(f"{channel}: sdk.has_comm_error()={has_err}", flush=True)
+                print(f"{channel}: sdk.get_comm_error()={comm_err}", flush=True)
+                print(f"{channel}: sdk.is_connected()={is_conn}", flush=True)
+                # Try reading joint angles directly to see if it's a timing issue
+                try:
+                    ja = sdk.get_joint_angles()
+                    print(f"{channel}: sdk.get_joint_angles()={ja}", flush=True)
+                except Exception as e:
+                    print(f"{channel}: sdk.get_joint_angles() raised: {e}", flush=True)
+            except Exception as e:
+                print(f"{channel}: sdk introspection failed: {e}", flush=True)
+        else:
+            print(f"{channel}: sdk is None — connect() raised an exception internally", flush=True)
+            print(f"  Check the log output above for the root cause.", flush=True)
+
         raise RuntimeError(
             f"{channel}: failed to connect NERO adapter "
             f"(error_code={error_code}, error={error_message!r})"
@@ -153,6 +247,8 @@ def command_zero(adapters: dict[str, NeroAdapter]) -> None:
 
 def main() -> None:
     adapters: dict[str, NeroAdapter] = {}
+
+    _diagnose_can(CAN_CHANNELS)
 
     try:
         for channel in CAN_CHANNELS:

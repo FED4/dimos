@@ -37,6 +37,8 @@ NERO_DOF = 7
 ENABLE_RETRY_COUNT = 50
 ENABLE_RETRY_INTERVAL = 0.01
 DEFAULT_ENABLE_CALL_TIMEOUT = 0.2
+CONNECT_READ_TIMEOUT_S = 2.0
+CONNECT_READ_POLL_INTERVAL_S = 0.05
 DEFAULT_SPEED_PERCENT = 50
 DEFAULT_FIRMWARE_VERSION = "v120"
 DEFAULT_INTERFACE = "socketcan"
@@ -141,7 +143,18 @@ class NeroAdapter(ManipulatorAdapter):
                 self._clear_connection_state()
                 return False
 
-            if self.read_joint_positions():
+            # Poll for the first CAN feedback frame. The arm broadcasts at ~10 Hz
+            # so the read thread may not have received any data yet immediately
+            # after sdk.connect(). Retry for up to CONNECT_READ_TIMEOUT_S.
+            deadline = time.monotonic() + CONNECT_READ_TIMEOUT_S
+            positions = None
+            while time.monotonic() < deadline:
+                try:
+                    positions = self.read_joint_positions()
+                    break
+                except RuntimeError:
+                    time.sleep(CONNECT_READ_POLL_INTERVAL_S)
+            if positions is not None:
                 self._connected = True
                 self._set_speed_percent(self._speed_percent)
                 logger.info("NERO connected", can_port=self._channel)
