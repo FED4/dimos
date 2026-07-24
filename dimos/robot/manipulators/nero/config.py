@@ -82,7 +82,7 @@ NERO_BASE_Z = 0.59
 NERO_LEFT_BASE_RPY = (-1.57, -1.57, 0.0)
 NERO_RIGHT_BASE_RPY = (1.57, -1.57, 0.0)
 NERO_TABLE_OBSTACLE_NAME = "nero_table"
-NERO_TABLE_CENTER = (-0.51, 0.055, -0.01)
+NERO_TABLE_CENTER = (0.51, -0.055, -0.01)
 NERO_TABLE_SIZE = (1.2, 1.17, 0.08)
 
 
@@ -172,6 +172,7 @@ def nero_body_static_model() -> dict[str, Any]:
         "package_paths": _nero_package_paths(),
         "load_meshes": True,
         "load_collision_meshes": False,
+        "wxyz": (0.0, 0.0, 0.0, 1.0),  # 180° yaw rotation
     }
 
 
