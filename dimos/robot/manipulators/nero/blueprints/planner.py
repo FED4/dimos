@@ -22,10 +22,34 @@ from dimos.robot.manipulators.nero.blueprints.basic import (
     coordinator_nero_bimanual,
     coordinator_nero_mock,
 )
-from dimos.robot.manipulators.nero.config import nero_model_config
+from dimos.robot.manipulators.nero.config import (
+    NERO_BASE_X,
+    NERO_BASE_Z,
+    NERO_LEFT_BASE_RPY,
+    NERO_LEFT_BASE_Y,
+    NERO_RIGHT_BASE_RPY,
+    NERO_RIGHT_BASE_Y,
+    nero_model_config,
+)
 
-left_model = nero_model_config("left_arm")
-right_model = nero_model_config("right_arm")
+left_model = nero_model_config(
+    "left_arm",
+    x_offset=NERO_BASE_X,
+    y_offset=NERO_LEFT_BASE_Y,
+    z_offset=NERO_BASE_Z,
+    roll=NERO_LEFT_BASE_RPY[0],
+    pitch=NERO_LEFT_BASE_RPY[1],
+    yaw=NERO_LEFT_BASE_RPY[2],
+)
+right_model = nero_model_config(
+    "right_arm",
+    x_offset=NERO_BASE_X,
+    y_offset=NERO_RIGHT_BASE_Y,
+    z_offset=NERO_BASE_Z,
+    roll=NERO_RIGHT_BASE_RPY[0],
+    pitch=NERO_RIGHT_BASE_RPY[1],
+    yaw=NERO_RIGHT_BASE_RPY[2],
+)
 
 nero_mock_planner_coordinator = autoconnect(
     planner(robots=[left_model, right_model]),

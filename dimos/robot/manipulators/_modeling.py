@@ -37,11 +37,29 @@ def base_pose(
     y: float = 0.0,
     z: float = 0.0,
     pitch: float = 0.0,
+    *,
+    roll: float = 0.0,
+    yaw: float = 0.0,
 ) -> PoseStamped:
+    half_roll = roll / 2.0
     half_pitch = pitch / 2.0
+    half_yaw = yaw / 2.0
+    cr = math.cos(half_roll)
+    sr = math.sin(half_roll)
+    cp = math.cos(half_pitch)
+    sp = math.sin(half_pitch)
+    cy = math.cos(half_yaw)
+    sy = math.sin(half_yaw)
     return PoseStamped(
         position=Vector3(x=x, y=y, z=z),
-        orientation=Quaternion([0.0, math.sin(half_pitch), 0.0, math.cos(half_pitch)]),
+        orientation=Quaternion(
+            [
+                sr * cp * cy - cr * sp * sy,
+                cr * sp * cy + sr * cp * sy,
+                cr * cp * sy - sr * sp * cy,
+                cr * cp * cy + sr * sp * sy,
+            ]
+        ),
     )
 
 
