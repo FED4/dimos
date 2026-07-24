@@ -34,6 +34,7 @@ from dimos.manipulation.planning.spec.config import RobotModelConfig
 from dimos.manipulation.planning.spec.enums import ObstacleType
 from dimos.manipulation.planning.spec.models import Obstacle
 from dimos.manipulation.planning.utils.mesh_utils import prepare_urdf_for_drake
+from dimos.manipulation.visualization.viser.config import StaticVisualizationModelConfig
 from dimos.manipulation.visualization.viser.animation import (
     GroupPreviewAnimation,
     PreviewFrame,
@@ -124,6 +125,9 @@ class ViserManipulationScene:
         self._configs_by_id: dict[str, RobotModelConfig] = {}
         self._models_by_id: dict[str, URDF] = {}
         self._urdfs: dict[str, ViserUrdf] = {}
+        self._current_mesh_loads: dict[str, tuple[bool, bool]] = {}
+        self._static_urdfs: dict[str, ViserUrdf] = {}
+        self._static_root_frames: dict[str, FrameHandle] = {}
         self._joint_names_by_urdf: dict[int, tuple[str, ...]] = {}
         self._handles: dict[str, TransformControlsHandle] = {}
         self._root_frames: dict[str, FrameHandle] = {}
@@ -390,10 +394,14 @@ class ViserManipulationScene:
         self._target_tracks_current.setdefault(robot_id, True)
         if config.model_path and robot_id not in self._models_by_id:
             self._models_by_id[robot_id] = self._load_robot_model(config)
-        self._ensure_robot_urdfs(robot_id, config)
+        self._ensure_robot_urdfs(robot_id, config, kinds=("current",))
 
     def set_target_active(self, robot_id: str, active: bool) -> None:
         """Show the target ghost only while a pose-target group is selected."""
+        if active:
+            config = self._configs_by_id.get(robot_id)
+            if config is not None:
+                self._ensure_robot_urdfs(robot_id, config, kinds=("target",))
         self._target_active[robot_id] = active
         if not active:
             self._target_tracks_current[robot_id] = True
@@ -453,7 +461,7 @@ class ViserManipulationScene:
             config = self._configs_by_id.get(robot_id)
             if config is None or joint_state is None:
                 return
-            self._ensure_robot_urdfs(robot_id, config)
+            self._ensure_robot_urdfs(robot_id, config, kinds=("current",))
             current = self._urdfs.get(f"{robot_id}:current")
             self.set_urdf_joints(current, config.joint_names, joint_state.position)
             if self._target_tracks_current.get(robot_id, True):
@@ -500,6 +508,10 @@ class ViserManipulationScene:
         if not tick_times:
             return False
         with self._scene_lock:
+            for robot_id in frames:
+                config = self._configs_by_id.get(robot_id)
+                if config is not None:
+                    self._ensure_robot_urdfs(robot_id, config, kinds=("preview",))
             self._animation_generation += 1
             generations: dict[str, int] = {}
             for robot_id in frames:
@@ -552,6 +564,9 @@ class ViserManipulationScene:
     def set_target_joints(
         self, robot_id: str, joint_names: Sequence[str], joints: Sequence[float]
     ) -> bool:
+        config = self._configs_by_id.get(robot_id)
+        if config is not None:
+            self._ensure_robot_urdfs(robot_id, config, kinds=("target",))
         target = self._urdfs.get(f"{robot_id}:target")
         if target is None:
             return False
@@ -630,6 +645,10 @@ class ViserManipulationScene:
                 self._remove_scene_handle(urdf)
             for frame in self._root_frames.values():
                 self._remove_scene_handle(frame)
+            for urdf in self._static_urdfs.values():
+                self._remove_scene_handle(urdf)
+            for frame in self._static_root_frames.values():
+                self._remove_scene_handle(frame)
             for urdf in self._collision_fallback_urdfs.values():
                 self._remove_scene_handle(urdf)
             for handle in self._obstacle_gui_handles:
@@ -637,7 +656,10 @@ class ViserManipulationScene:
             self._obstacle_gui_handles.clear()
             self._urdfs.clear()
             self._root_frames.clear()
+            self._static_urdfs.clear()
+            self._static_root_frames.clear()
             self._models_by_id.clear()
+            self._current_mesh_loads.clear()
             self._joint_names_by_urdf.clear()
             self._collision_fallback_urdfs.clear()
             self._configs_by_id.clear()
@@ -646,13 +668,56 @@ class ViserManipulationScene:
             self._target_tracks_current.clear()
             self._robot_display_mode = RobotDisplayMode.VISUAL
 
-    def _ensure_robot_urdfs(self, robot_id: str, config: RobotModelConfig) -> None:
+    def register_static_model(self, config: StaticVisualizationModelConfig) -> None:
+        """Render a fixed URDF model that is not part of the planning robot registry."""
+        if not config.model_path or config.name in self._static_urdfs:
+            return
+        package_paths = {package: Path(path) for package, path in config.package_paths.items()}
+        prepared_path = Path(
+            prepare_urdf_for_drake(
+                Path(str(config.model_path)),
+                package_paths=package_paths,
+                xacro_args={str(key): str(value) for key, value in config.xacro_args.items()},
+                convert_meshes=bool(config.auto_convert_meshes),
+            )
+        )
+        model = URDF.load(
+            prepared_path,
+            build_scene_graph=True,
+            build_collision_scene_graph=bool(config.load_collision_meshes),
+            load_meshes=bool(config.load_meshes),
+            load_collision_meshes=bool(config.load_collision_meshes),
+        )
+        root_name = f"/static/{config.name}"
+        frame = self.server.scene.add_frame(
+            root_name,
+            show_axes=False,
+            position=tuple(float(value) for value in config.position),
+            wxyz=tuple(float(value) for value in config.wxyz),
+        )
+        urdf = self.viser_urdf(
+            self.server,
+            urdf_or_path=model,
+            root_node_name=f"{root_name}/urdf",
+            load_meshes=bool(config.load_meshes),
+            load_collision_meshes=bool(config.load_collision_meshes),
+        )
+        self._static_root_frames[config.name] = frame
+        self._static_urdfs[config.name] = urdf
+
+    def _ensure_robot_urdfs(
+        self,
+        robot_id: str,
+        config: RobotModelConfig,
+        *,
+        kinds: Sequence[str] = ("current", "target", "preview"),
+    ) -> None:
         if not config.model_path:
             return
         model = self._models_by_id.get(robot_id)
         if model is None:
             return
-        for kind in ("current", "target", "preview"):
+        for kind in kinds:
             key = f"{robot_id}:{kind}"
             if key in self._urdfs:
                 continue
@@ -668,17 +733,29 @@ class ViserManipulationScene:
                 old_fallback = self._collision_fallback_urdfs.pop(robot_id, None)
                 if old_fallback is not None:
                     self._remove_scene_handle(old_fallback)
+                load_visual_meshes = self._robot_display_mode in {
+                    RobotDisplayMode.VISUAL,
+                    RobotDisplayMode.BOTH,
+                }
+                load_collision_meshes = self._robot_display_mode in {
+                    RobotDisplayMode.COLLISION,
+                    RobotDisplayMode.BOTH,
+                }
                 urdf = self.viser_urdf(
                     self.server,
                     urdf_or_path=model,
                     root_node_name=root_node_name,
                     mesh_color_override=mesh_color_override,
-                    load_meshes=True,
-                    load_collision_meshes=True,
+                    load_meshes=load_visual_meshes,
+                    load_collision_meshes=load_collision_meshes,
                     collision_mesh_color_override=(
                         *COLLISION_MESH_COLOR,
                         COLLISION_MESH_OPACITY,
                     ),
+                )
+                self._current_mesh_loads[robot_id] = (
+                    load_visual_meshes,
+                    load_collision_meshes,
                 )
             else:
                 urdf = self.viser_urdf(
@@ -736,14 +813,33 @@ class ViserManipulationScene:
             return
         has_collision = self._model_has_collision_geometry(model)
         mode = self._robot_display_mode
-        # Viser's public flags manage all links, including links whose mesh
-        # handles are not exposed by the helper.  A model without collision
-        # geometry falls back to its visual representation.
-        current.show_visual = mode in {RobotDisplayMode.VISUAL, RobotDisplayMode.BOTH}
-        current.show_collision = has_collision and mode in {
+        needs_visual = mode in {RobotDisplayMode.VISUAL, RobotDisplayMode.BOTH}
+        needs_collision = has_collision and mode in {
             RobotDisplayMode.COLLISION,
             RobotDisplayMode.BOTH,
         }
+        loaded_visual, loaded_collision = self._current_mesh_loads.get(robot_id, (True, True))
+        if (needs_visual and not loaded_visual) or (needs_collision and not loaded_collision):
+            self._remove_scene_handle(current)
+            self._urdfs.pop(f"{robot_id}:current", None)
+            self._current_mesh_loads.pop(robot_id, None)
+            config = self._configs_by_id.get(robot_id)
+            if config is not None:
+                self._ensure_robot_urdfs(robot_id, config, kinds=("current",))
+            current = self._urdfs.get(f"{robot_id}:current")
+            if current is None:
+                return
+        # Viser's public flags manage all links, including links whose mesh
+        # handles are not exposed by the helper.  A model without collision
+        # geometry falls back to its visual representation.
+        loaded_visual, loaded_collision = self._current_mesh_loads.get(robot_id, (True, True))
+        if loaded_visual:
+            current.show_visual = mode in {RobotDisplayMode.VISUAL, RobotDisplayMode.BOTH}
+        if loaded_collision:
+            current.show_collision = has_collision and mode in {
+                RobotDisplayMode.COLLISION,
+                RobotDisplayMode.BOTH,
+            }
         fallback = self._collision_fallback_urdfs.get(robot_id)
         if fallback is not None:
             fallback.show_visual = mode in {

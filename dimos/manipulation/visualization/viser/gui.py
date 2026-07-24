@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, MutableMapping, Sequence
+from contextlib import suppress
 from typing import TypeAlias, cast
 
 from dimos.manipulation.planning.groups.models import PlanningGroup
@@ -751,7 +752,8 @@ class ViserPanelGui:
         for key, handle in list(self._handles.items()):
             remove = getattr(handle, "remove", None)
             if callable(remove):
-                remove()
+                with suppress(Exception):
+                    remove()
             self._handles.pop(key, None)
 
     def _sync_preset_dropdown(self) -> None:

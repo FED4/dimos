@@ -32,6 +32,7 @@ import time
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 from pydantic import Field
+from pydantic import BaseModel, ConfigDict
 
 from dimos.agents.annotation import skill
 from dimos.agents.skill_result import SkillResult
@@ -116,6 +117,19 @@ class ManipulationState(Enum):
     FAULT = 4
 
 
+class StartupObstacleConfig(BaseModel):
+    """Obstacle to add when the manipulation planning world starts."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    shape: str = "box"
+    position: tuple[float, float, float]
+    orientation_xyzw: tuple[float, float, float, float] = (0.0, 0.0, 0.0, 1.0)
+    dimensions: tuple[float, ...] = ()
+    mesh_path: str | None = None
+
+
 class ManipulationModuleConfig(ModuleConfig):
     """Configuration for ManipulationModule."""
 
@@ -133,6 +147,7 @@ class ManipulationModuleConfig(ModuleConfig):
     # to prevent the planner from routing trajectories below this height.
     # Set to None to disable.
     floor_z: float | None = None
+    startup_obstacles: list[StartupObstacleConfig] = Field(default_factory=list)
 
 
 class ManipulationModule(Module):
@@ -270,6 +285,29 @@ class ManipulationModule(Module):
             )
             self._world_monitor.add_obstacle(floor_obs)
             logger.info(f"Floor obstacle added at z={fz:.3f}")
+
+        for obstacle_config in self.config.startup_obstacles:
+            obstacle_type = {
+                "box": ObstacleType.BOX,
+                "sphere": ObstacleType.SPHERE,
+                "cylinder": ObstacleType.CYLINDER,
+                "mesh": ObstacleType.MESH,
+            }.get(obstacle_config.shape)
+            if obstacle_type is None:
+                logger.warning(f"Unknown startup obstacle shape: {obstacle_config.shape}")
+                continue
+            obstacle = Obstacle(
+                name=obstacle_config.name,
+                pose=Pose(
+                    Vector3(*obstacle_config.position),
+                    Quaternion(*obstacle_config.orientation_xyzw),
+                ),
+                obstacle_type=obstacle_type,
+                dimensions=tuple(obstacle_config.dimensions),
+                mesh_path=obstacle_config.mesh_path,
+            )
+            obstacle_id = self._world_monitor.add_obstacle(obstacle)
+            logger.info(f"Startup obstacle added: {obstacle_config.name} ({obstacle_id})")
 
         for _, (robot_id, _, _) in self._robots.items():
             self._world_monitor.start_state_monitor(robot_id)

@@ -57,6 +57,8 @@ NERO_MODEL_LFS_FALLBACKS = (
     NERO_MODEL_PATH,
     AGX_ARM_URDF_PKG / "nero/urdf/nero_with_gripper_description.xacro",
 )
+NERO_BODY_MODEL_RELATIVE_PATH = Path("urdf/wbcd_urdf.urdf")
+NERO_BODY_MODEL_PATH = NERO_LOCAL_WBCD_URDF / NERO_BODY_MODEL_RELATIVE_PATH
 NERO_PACKAGE_PATHS: dict[str, Path] = {
     "agx_arm_description": NERO_LOCAL_AGX_ARM_DESCRIPTION,
     "wbcd_urdf": NERO_LOCAL_WBCD_URDF,
@@ -79,6 +81,9 @@ NERO_RIGHT_BASE_Y = -0.1
 NERO_BASE_Z = 0.59
 NERO_LEFT_BASE_RPY = (-1.57, -1.57, 0.0)
 NERO_RIGHT_BASE_RPY = (1.57, -1.57, 0.0)
+NERO_TABLE_OBSTACLE_NAME = "nero_table"
+NERO_TABLE_CENTER = (-0.51, 0.055, -0.01)
+NERO_TABLE_SIZE = (1.2, 1.17, 0.08)
 
 
 def nero_joints(hardware_id: str) -> list[str]:
@@ -157,6 +162,27 @@ def _nero_package_paths() -> dict[str, Path]:
         return extracted_packages
 
     return {"agx_arm_description": AGX_ARM_DESCRIPTION_PKG}
+
+
+def nero_body_static_model() -> dict[str, Any]:
+    """Return Viser static-model config for the WBCD body/base."""
+    return {
+        "name": "nero_body",
+        "model_path": NERO_BODY_MODEL_PATH,
+        "package_paths": _nero_package_paths(),
+        "load_meshes": True,
+        "load_collision_meshes": False,
+    }
+
+
+def nero_default_table_obstacle() -> dict[str, Any]:
+    """Return startup planning obstacle for the measured table."""
+    return {
+        "name": NERO_TABLE_OBSTACLE_NAME,
+        "shape": "box",
+        "position": NERO_TABLE_CENTER,
+        "dimensions": NERO_TABLE_SIZE,
+    }
 
 
 def nero_model_config(

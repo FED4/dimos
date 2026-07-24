@@ -30,7 +30,7 @@ from dimos.manipulation.visualization.viser.runtime import (
     ViserRuntime,
     ViserServer,
 )
-from dimos.manipulation.visualization.viser.scene import ViserManipulationScene
+from dimos.manipulation.visualization.viser.scene import RobotDisplayMode, ViserManipulationScene
 from dimos.manipulation.visualization.viser.theme import apply_dimos_theme
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.trajectory_msgs.JointTrajectory import JointTrajectory
@@ -90,6 +90,9 @@ class ViserManipulationVisualizer:
             server = runtime.start()
             apply_dimos_theme(server)
             scene = ViserManipulationScene(server, ViserUrdf)
+            scene.robot_display_mode = RobotDisplayMode(self.config.robot_display_mode)
+            for static_model in self.config.static_models:
+                scene.register_static_model(static_model)
             gui = (
                 ViserPanelGui(
                     server,

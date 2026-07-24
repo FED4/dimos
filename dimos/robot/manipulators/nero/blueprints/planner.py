@@ -29,6 +29,8 @@ from dimos.robot.manipulators.nero.config import (
     NERO_LEFT_BASE_Y,
     NERO_RIGHT_BASE_RPY,
     NERO_RIGHT_BASE_Y,
+    nero_body_static_model,
+    nero_default_table_obstacle,
     nero_model_config,
 )
 
@@ -51,12 +53,27 @@ right_model = nero_model_config(
     yaw=NERO_RIGHT_BASE_RPY[2],
 )
 
+nero_visualization = {
+    "backend": "viser",
+    "robot_display_mode": "collision",
+    "static_models": [nero_body_static_model()],
+}
+nero_startup_obstacles = [nero_default_table_obstacle()]
+
 nero_mock_planner_coordinator = autoconnect(
-    planner(robots=[left_model, right_model]),
+    planner(
+        robots=[left_model, right_model],
+        visualization=nero_visualization,
+        startup_obstacles=nero_startup_obstacles,
+    ),
     coordinator_nero_mock,
 )
 
 nero_planner_coordinator = autoconnect(
-    planner(robots=[left_model, right_model]),
+    planner(
+        robots=[left_model, right_model],
+        visualization=nero_visualization,
+        startup_obstacles=nero_startup_obstacles,
+    ),
     coordinator_nero_bimanual,
 )

@@ -14,9 +14,26 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+
+
+class StaticVisualizationModelConfig(BaseModel):
+    """Static URDF model to render in the in-process Viser scene."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    model_path: Path
+    package_paths: dict[str, Path] = Field(default_factory=dict)
+    xacro_args: dict[str, str] = Field(default_factory=dict)
+    auto_convert_meshes: bool = False
+    position: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    wxyz: tuple[float, float, float, float] = (1.0, 0.0, 0.0, 0.0)
+    load_meshes: bool = True
+    load_collision_meshes: bool = False
 
 
 class ViserVisualizationConfig(BaseModel):
@@ -35,6 +52,11 @@ class ViserVisualizationConfig(BaseModel):
     panel_enabled: bool = Field(
         default=True, validation_alias=AliasChoices("panel_enabled", "viser_panel_enabled")
     )
+    robot_display_mode: Literal["visual", "collision", "both"] = Field(
+        default="visual",
+        validation_alias=AliasChoices("robot_display_mode", "viser_robot_display_mode"),
+    )
+    static_models: tuple[StaticVisualizationModelConfig, ...] = Field(default_factory=tuple)
     poll_hz: float = Field(default=5.0, validation_alias=AliasChoices("poll_hz", "viser_poll_hz"))
     preview_duration: float = Field(
         default=3.0, validation_alias=AliasChoices("preview_duration", "viser_preview_duration")
