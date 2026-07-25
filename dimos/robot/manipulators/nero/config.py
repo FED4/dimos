@@ -65,6 +65,15 @@ NERO_MODEL_LFS_FALLBACKS = (
     NERO_MODEL_PATH,
     AGX_ARM_URDF_PKG / "nero/urdf/nero_with_gripper_description.xacro",
 )
+# Plain single-arm URDF (no gripper, no xacro macros) used by the teleop
+# TeleopIKTask, whose Pinocchio solver calls buildModelFromUrdf directly and
+# therefore cannot expand the .xacro above. Same 7-DOF chain (joint1..joint7,
+# tip link7 -> ee_joint_id=7); the gripper is driven separately via
+# gripper_joint, so the arm-only URDF is exactly what IK needs.
+NERO_FK_MODEL_RELATIVE_PATH = Path("agx_arm_urdf/nero/urdf/nero_description.urdf")
+NERO_FK_MODEL = NERO_LOCAL_AGX_ARM_DESCRIPTION / NERO_FK_MODEL_RELATIVE_PATH
+NERO_EE_JOINT_ID = NERO_DOF  # tip link7 is the 7th joint in the chain
+
 NERO_BODY_MODEL_RELATIVE_PATH = Path("urdf/wbcd_urdf.urdf")
 NERO_BODY_MODEL_PATH = NERO_LOCAL_WBCD_URDF / NERO_BODY_MODEL_RELATIVE_PATH
 NERO_PACKAGE_PATHS: dict[str, Path] = {
