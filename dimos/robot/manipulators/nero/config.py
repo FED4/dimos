@@ -44,9 +44,7 @@ NERO_AGX_GRIPPER = "agx_gripper"
 # flat URDF with exactly the seven arm joints (``nq == NERO_DOF``). Verified:
 # joints joint1..joint7, ee_joint_id 7 == joint7 (link7 tip), matching the
 # planning tip_link.
-NERO_FK_MODEL = (
-    NERO_ASSETS_DIR / "agx_arm_description/agx_arm_urdf/nero/urdf/nero_description.urdf"
-)
+NERO_FK_MODEL = NERO_ASSETS_DIR / "agx_arm_description/agx_arm_urdf/nero/urdf/nero_description.urdf"
 NERO_EE_JOINT_ID = NERO_DOF  # 7 (Pinocchio joint id of the end-effector joint)
 
 # Single-arm URDF/Xacro used by Pinocchio IK and planning per-arm.
@@ -60,9 +58,7 @@ NERO_MODEL_RELATIVE_PATH = Path("agx_arm_urdf/nero/urdf/nero_with_gripper_descri
 NERO_MODEL_PATH = AGX_ARM_DESCRIPTION_PKG / NERO_MODEL_RELATIVE_PATH
 NERO_MODEL_PATH_FALLBACKS = (
     NERO_LOCAL_AGX_ARM_DESCRIPTION / NERO_MODEL_RELATIVE_PATH,
-    Path.home()
-    / "wbcd_extracted/agx_arm_sim/agx_arm_description"
-    / NERO_MODEL_RELATIVE_PATH,
+    Path.home() / "wbcd_extracted/agx_arm_sim/agx_arm_description" / NERO_MODEL_RELATIVE_PATH,
     Path.home() / "agx_arm_urdf/nero/urdf/nero_with_gripper_description.xacro",
 )
 NERO_MODEL_LFS_FALLBACKS = (
@@ -138,10 +134,12 @@ def nero_real_hardware(
     interface: str = "socketcan",
     effector_type: str | None = None,
     gripper_force: float = 1.0,
+    servo_backend: str = "cpv",
 ) -> HardwareComponent:
     adapter_kwargs: dict[str, Any] = {
         "firmware_version": firmware_version,
         "interface": interface,
+        "servo_backend": servo_backend,
     }
     if effector_type is not None:
         adapter_kwargs.update(

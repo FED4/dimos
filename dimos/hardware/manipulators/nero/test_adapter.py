@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from dimos.hardware.manipulators.nero.adapter import NERO_DOF, NeroAdapter
 from dimos.hardware.manipulators.spec import ControlMode
 
@@ -26,16 +28,15 @@ class FakeNeroSdk:
         self.move_j_calls: list[list[float]] = []
         self.move_cpv_pos_calls: list[tuple[int, float]] = []
         self.move_cpv_vel_calls: list[tuple[int, float]] = []
+        self.move_js_calls: list[list[float]] = []
         self.speed_percent: list[int] = []
         self.events: list[str] = []
         self.disable_calls = 0
         self.disconnect_calls = 0
         self.effector = FakeAgxGripper()
-        self.OPTIONS = SimpleNamespace(
-            EFFECTOR=SimpleNamespace(AGX_GRIPPER="agx_gripper")
-        )
+        self.OPTIONS = SimpleNamespace(EFFECTOR=SimpleNamespace(AGX_GRIPPER="agx_gripper"))
 
-    def init_effector(self, effector_type: str) -> "FakeAgxGripper":
+    def init_effector(self, effector_type: str) -> FakeAgxGripper:
         self.events.append(f"init_effector:{effector_type}")
         return self.effector
 
@@ -63,6 +64,9 @@ class FakeNeroSdk:
 
     def move_cpv_vel(self, joint_index: int, vel: float) -> None:
         self.move_cpv_vel_calls.append((joint_index, vel))
+
+    def move_js(self, joints: list[float]) -> None:
+        self.move_js_calls.append(joints)
 
     def get_motor_states(self, joint_index: int) -> SimpleNamespace:
         return SimpleNamespace(
@@ -114,9 +118,37 @@ def test_servo_position_mode_uses_cpv_position_per_joint() -> None:
     assert sdk.motion_modes == ["cpv", "cpv"]
     assert sdk.move_j_calls == []
     assert sdk.move_cpv_pos_calls == [
-        (joint_index, positions[joint_index - 1])
-        for joint_index in range(1, NERO_DOF + 1)
+        (joint_index, positions[joint_index - 1]) for joint_index in range(1, NERO_DOF + 1)
     ]
+
+
+def test_servo_position_mit_js_backend_uses_move_js() -> None:
+    sdk = FakeNeroSdk()
+    adapter = NeroAdapter(servo_backend="mit_js")
+    adapter._sdk = sdk
+
+    positions = [0.1 * i for i in range(NERO_DOF)]
+
+    assert adapter.set_control_mode(ControlMode.SERVO_POSITION)
+    assert adapter.write_joint_positions(positions)
+
+    # MIT passthrough (follower) motion mode, one move_js call for all joints.
+    assert sdk.motion_modes == ["js", "js"]
+    assert sdk.move_js_calls == [positions]
+    assert sdk.move_cpv_pos_calls == []
+    assert sdk.move_j_calls == []
+
+
+def test_mit_js_backend_fails_when_sdk_lacks_move_js() -> None:
+    adapter = NeroAdapter(servo_backend="mit_js")
+    adapter._sdk = SimpleNamespace(set_motion_mode=lambda _: None)
+
+    assert not adapter.set_control_mode(ControlMode.SERVO_POSITION)
+
+
+def test_invalid_servo_backend_rejected() -> None:
+    with pytest.raises(ValueError, match="servo_backend"):
+        NeroAdapter(servo_backend="bogus")
 
 
 def test_velocity_mode_uses_cpv_velocity_per_joint() -> None:
@@ -130,8 +162,7 @@ def test_velocity_mode_uses_cpv_velocity_per_joint() -> None:
 
     assert sdk.motion_modes == ["cpv", "cpv"]
     assert sdk.move_cpv_vel_calls == [
-        (joint_index, velocities[joint_index - 1])
-        for joint_index in range(1, NERO_DOF + 1)
+        (joint_index, velocities[joint_index - 1]) for joint_index in range(1, NERO_DOF + 1)
     ]
 
 

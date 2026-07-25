@@ -147,9 +147,9 @@ class NeroPatternPlannerConfig(ModuleConfig):
     amplitude: float = 0.03
     radius: float = 0.04
     period: float = 2.0
-    rate_hz: float = 50.0
-    axis: str = "z"
-    plane: str = "xy"
+    rate_hz: float = 100.0
+    axis: str = "x"
+    plane: str = "xz"
     active: bool = True
 
 
@@ -223,7 +223,7 @@ class NeroPatternPlannerModule(Module):
         super().start()
         self._stop.clear()
         self.coordinator_joint_state.subscribe(self._on_joint_state)
-        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread = threading.Thread(target=self._stream_loop, daemon=True)
         self._thread.start()
         logger.info("NeroPatternPlannerModule started", arm=self.config.arm)
 
@@ -353,9 +353,15 @@ class NeroPatternPlannerModule(Module):
         )
         logger.info("Pattern centre seeded from current EE", center=self._center.tolist())
 
-    def _loop(self) -> None:
+    def _stream_loop(self) -> None:
+        # Drift-compensated fixed-rate scheduler: schedule each publish at an
+        # absolute deadline (next_t += dt) instead of sleeping a fixed dt after
+        # variable per-iteration work. This keeps the sample interval uniform, so
+        # the streamed velocity is smooth (plain time.sleep(dt) accumulates OS
+        # scheduling jitter -> uneven spacing -> visible chop, worst at speed).
         dt = 1.0 / max(1e-3, self.config.rate_hz)
         t0 = time.perf_counter()
+        next_t = t0
         while not self._stop.is_set():
             now = time.perf_counter()
             cmd: PoseStamped | None = None
@@ -375,7 +381,14 @@ class NeroPatternPlannerModule(Module):
                     cmd = self._to_base_command(world_pos, self._orientation)
             if cmd is not None:
                 self.coordinator_cartesian_command.publish(cmd)
-            time.sleep(dt)
+            next_t += dt
+            sleep = next_t - time.perf_counter()
+            if sleep > 0:
+                time.sleep(sleep)
+            else:
+                # Fell behind schedule (a slow tick); resync to now so we don't
+                # burst-publish to "catch up".
+                next_t = time.perf_counter()
 
     def _to_base_command(self, world_pos: np.ndarray, orientation: Quaternion) -> PoseStamped:
         world_pose = Pose(

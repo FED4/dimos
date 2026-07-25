@@ -104,6 +104,7 @@ all_blueprints = {
     "mid360-realsense-record-with-pcap": "dimos.robot.assembly.mid360_realsense_30:mid360_realsense_record_with_pcap",
     "nero-mock-planner-coordinator": "dimos.robot.manipulators.nero.blueprints.planner:nero_mock_planner_coordinator",
     "nero-pattern-planner-left": "dimos.robot.manipulators.nero.blueprints.pattern_planner:nero_pattern_planner_left",
+    "nero-pattern-planner-left-mit": "dimos.robot.manipulators.nero.blueprints.pattern_planner:nero_pattern_planner_left_mit",
     "nero-pattern-planner-mock": "dimos.robot.manipulators.nero.blueprints.pattern_planner:nero_pattern_planner_mock",
     "nero-planner-coordinator": "dimos.robot.manipulators.nero.blueprints.planner:nero_planner_coordinator",
     "openarm-mock-planner-coordinator": "dimos.robot.manipulators.openarm.blueprints.planner:openarm_mock_planner_coordinator",

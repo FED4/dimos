@@ -44,10 +44,21 @@ DEFAULT_FIRMWARE_VERSION = "v120"
 DEFAULT_INTERFACE = "socketcan"
 DEFAULT_BITRATE = 1_000_000
 CPV_MOTION_MODE = "cpv"
+JS_MOTION_MODE = "js"
 JOINT_MOTION_MODE = "j"
 AGX_GRIPPER_EFFECTOR = "agx_gripper"
 DEFAULT_GRIPPER_FORCE = 1.0
 DEFAULT_DISABLE_ON_DISCONNECT = False
+
+# SERVO_POSITION (high-frequency streaming) backend on the NERO driver:
+#   "cpv"    -> position-velocity mode, per-joint move_cpv_pos (smoothed by the driver)
+#   "mit_js" -> MIT passthrough (follower) mode, move_js with the full joint list in one
+#               call and driver-default gains (no smoothing/planning; faster response).
+# Both realize the same DimOS ControlMode.SERVO_POSITION; the driver call differs.
+CPV_SERVO_BACKEND = "cpv"
+MIT_JS_SERVO_BACKEND = "mit_js"
+SERVO_BACKENDS = (CPV_SERVO_BACKEND, MIT_JS_SERVO_BACKEND)
+DEFAULT_SERVO_BACKEND = CPV_SERVO_BACKEND
 
 DEFAULT_JOINT_LIMITS = JointLimits(
     position_lower=[
@@ -89,12 +100,17 @@ class NeroAdapter(ManipulatorAdapter):
         disable_on_disconnect: bool = DEFAULT_DISABLE_ON_DISCONNECT,
         enable_retry_count: int = ENABLE_RETRY_COUNT,
         enable_call_timeout: float = DEFAULT_ENABLE_CALL_TIMEOUT,
+        servo_backend: str = DEFAULT_SERVO_BACKEND,
         **sdk_kwargs: object,
     ) -> None:
         if dof != NERO_DOF:
             raise ValueError(f"NeroAdapter only supports {NERO_DOF} DOF (got {dof})")
         if effector_type not in (None, AGX_GRIPPER_EFFECTOR):
             raise ValueError(f"Unsupported NERO effector: {effector_type}")
+        if servo_backend not in SERVO_BACKENDS:
+            raise ValueError(
+                f"servo_backend must be one of {SERVO_BACKENDS}, got {servo_backend!r}"
+            )
         self._channel = address
         self._firmware_version = firmware_version
         self._interface = interface
@@ -105,6 +121,7 @@ class NeroAdapter(ManipulatorAdapter):
         self._disable_on_disconnect = disable_on_disconnect
         self._enable_retry_count = enable_retry_count
         self._enable_call_timeout = enable_call_timeout
+        self._servo_backend = servo_backend
         self._sdk_kwargs = sdk_kwargs
         self._sdk: Any | None = None
         self._effector: Any | None = None
@@ -251,7 +268,20 @@ class NeroAdapter(ManipulatorAdapter):
             ControlMode.VELOCITY,
         ):
             return False
-        if self._sdk is not None and mode in (ControlMode.SERVO_POSITION, ControlMode.VELOCITY):
+        if (
+            self._sdk is not None
+            and mode == ControlMode.SERVO_POSITION
+            and self._servo_backend == MIT_JS_SERVO_BACKEND
+        ):
+            if not self._has_mit_support():
+                logger.error(
+                    "NERO MIT (js) mode requested but pyAgxArm driver does not expose move_js",
+                    firmware_version=self._firmware_version,
+                )
+                return False
+            if not self._set_motion_mode(JS_MOTION_MODE):
+                return False
+        elif self._sdk is not None and mode in (ControlMode.SERVO_POSITION, ControlMode.VELOCITY):
             if not self._has_cpv_support():
                 logger.error(
                     "NERO CPV mode requested but pyAgxArm driver does not expose CPV APIs",
@@ -332,6 +362,8 @@ class NeroAdapter(ManipulatorAdapter):
             return False
         try:
             if self._control_mode == ControlMode.SERVO_POSITION:
+                if self._servo_backend == MIT_JS_SERVO_BACKEND:
+                    return self._write_js_positions(positions)
                 return self._write_cpv_positions(positions)
             else:
                 self._set_speed_percent(max(1, min(100, round(velocity * 100))))
@@ -539,6 +571,17 @@ class NeroAdapter(ManipulatorAdapter):
             sdk.move_cpv_pos(joint_index, float(position))
         return True
 
+    def _write_js_positions(self, positions: list[float]) -> bool:
+        sdk = self._sdk
+        if sdk is None or not self._has_mit_support():
+            return False
+        if not self._set_motion_mode(JS_MOTION_MODE):
+            return False
+        # move_js takes the whole joint vector in a single call (MIT passthrough,
+        # driver-default gains) -- unlike per-joint move_cpv_pos.
+        sdk.move_js([float(position) for position in positions])
+        return True
+
     def _write_cpv_velocities(self, velocities: list[float]) -> bool:
         sdk = self._sdk
         if sdk is None or not self._has_cpv_support():
@@ -557,6 +600,10 @@ class NeroAdapter(ManipulatorAdapter):
             and hasattr(sdk, "move_cpv_pos")
             and hasattr(sdk, "move_cpv_vel")
         )
+
+    def _has_mit_support(self) -> bool:
+        sdk = self._sdk
+        return sdk is not None and hasattr(sdk, "set_motion_mode") and hasattr(sdk, "move_js")
 
     def _set_motion_mode(self, motion_mode: str) -> bool:
         sdk = self._sdk

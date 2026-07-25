@@ -43,6 +43,7 @@ from dimos.robot.manipulators.nero.blueprints.cartesian import (
     left_model,
     mock_left,
 )
+from dimos.robot.manipulators.nero.config import NERO_LEFT_CAN, nero_real_hardware
 from dimos.robot.manipulators.nero.pattern_planner_module import NeroPatternPlannerModule
 
 # Mock: no CAN / no hardware. Stream patterns and watch the arm track in Viser.
@@ -52,9 +53,19 @@ nero_pattern_planner_mock = autoconnect(
     _viz(left_model),
 )
 
-# Real left arm (can0).
+# Real left arm (can0), CPV servo backend (default).
 nero_pattern_planner_left = autoconnect(
     _cartesian_coordinator(left_hw, CARTESIAN_IK_LEFT_TASK),
+    NeroPatternPlannerModule.blueprint(arm="left_arm"),
+    _viz(left_model),
+)
+
+# Real left arm (can0), MIT (move_js) servo backend with driver-default gains.
+# Same wiring as nero_pattern_planner_left; only the low-level SERVO_POSITION
+# realization differs (MIT passthrough instead of CPV).
+left_hw_mit = nero_real_hardware("left_arm", address=NERO_LEFT_CAN, servo_backend="mit_js")
+nero_pattern_planner_left_mit = autoconnect(
+    _cartesian_coordinator(left_hw_mit, CARTESIAN_IK_LEFT_TASK),
     NeroPatternPlannerModule.blueprint(arm="left_arm"),
     _viz(left_model),
 )
