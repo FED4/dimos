@@ -37,6 +37,18 @@ NERO_RIGHT_CAN = "can1"
 NERO_FIRMWARE_VERSION = "v120"
 NERO_AGX_GRIPPER = "agx_gripper"
 
+# Plain single-arm URDF (no gripper) for the control-side Pinocchio IK used by
+# the continuous ``cartesian_ik`` control task. Unlike the planning model, this
+# is loaded with a raw ``buildModelFromUrdf`` (no xacro / ``package://``
+# expansion; meshes are not loaded for the kinematic model), so it must be a
+# flat URDF with exactly the seven arm joints (``nq == NERO_DOF``). Verified:
+# joints joint1..joint7, ee_joint_id 7 == joint7 (link7 tip), matching the
+# planning tip_link.
+NERO_FK_MODEL = (
+    NERO_ASSETS_DIR / "agx_arm_description/agx_arm_urdf/nero/urdf/nero_description.urdf"
+)
+NERO_EE_JOINT_ID = NERO_DOF  # 7 (Pinocchio joint id of the end-effector joint)
+
 # Single-arm URDF/Xacro used by Pinocchio IK and planning per-arm.
 # Each arm gets its own RobotModelConfig with this URDF, placed at
 # different base_pose offsets (same pattern as dual_xarm6_planner).
@@ -71,6 +83,15 @@ NERO_GRIPPER_COLLISION_EXCLUSIONS: list[tuple[str, str]] = [
     ("gripper_base", "gripper_link1"),
     ("gripper_base", "gripper_link2"),
     ("gripper_link1", "gripper_link2"),
+    # Wrist/flange collision meshes overlap in every configuration (including the
+    # all-zeros home pose), so Drake flags them as permanent self-collisions even
+    # though they never physically interfere. These pairs are non-adjacent (not
+    # auto-filtered) and must be excluded explicitly. Penetration depths measured
+    # at home: link6<->gripper_flange ~61mm, link5<->gripper_flange ~28mm,
+    # link5<->link7 ~3mm (see scripts/demo_collision_inspect.py).
+    ("link6", "gripper_flange"),
+    ("link5", "gripper_flange"),
+    ("link5", "link7"),
 ]
 
 # Physical placement of each arm on the massage robot chassis, copied from

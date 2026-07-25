@@ -37,7 +37,7 @@ class ManipulationModuleHarness(ManipulationModule):
         self._planner = None
         self._kinematics = None
         self._coordinator_client = None
-        self.config = MagicMock(planning_timeout=10.0)
+        self.config = MagicMock(planning_timeout=10.0, execution_start_tolerance=1e-6)
 
 
 def make_module() -> ManipulationModule:

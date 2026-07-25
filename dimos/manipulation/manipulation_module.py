@@ -148,6 +148,15 @@ class ManipulationModuleConfig(ModuleConfig):
     # Set to None to disable.
     floor_z: float | None = None
     startup_obstacles: list[StartupObstacleConfig] = Field(default_factory=list)
+    # Max per-joint deviation (radians) allowed between a stored plan's start
+    # configuration and the robot's live joint feedback at execute() time. The
+    # guard rejects execution of a plan whose start no longer matches reality
+    # (e.g. the arm moved since planning). This must be larger than the numeric
+    # noise/jitter in the joint-feedback pipeline: physical encoders and even the
+    # mock/coordinator round-trip vary by ~1e-5 rad between reads, so the
+    # historical 1e-6 default rejected valid plans. 1e-3 rad (~0.057 deg) is
+    # tight enough to catch real motion while tolerating feedback noise.
+    execution_start_tolerance: float = 1e-3
 
 
 class ManipulationModule(Module):
@@ -1547,7 +1556,9 @@ class ManipulationModule(Module):
             return False
         previous_state, target_plan, token = execution
         try:
-            freshness_error = self._stored_plan_freshness_error(target_plan)
+            freshness_error = self._stored_plan_freshness_error(
+                target_plan, self.config.execution_start_tolerance
+            )
             if freshness_error is not None:
                 self._restore_execution_gate(token, previous_state, freshness_error)
                 return False
