@@ -216,10 +216,12 @@ class NeroCartesianPatternModule(Module):
 
     # ------------------------------------------------------------------ internals
     def _on_joint_state(self, msg: JointState) -> None:
+        logger.info("DEBUG _on_joint_state fired", names=list(msg.name)[:2])
         by_name = dict(zip(msg.name, msg.position, strict=False))
         try:
             q = np.array([by_name[n] for n in self._joint_names], dtype=float)
         except KeyError:
+            logger.info("DEBUG joint name mismatch", want=self._joint_names, got=list(msg.name))
             return  # this message isn't for our arm / incomplete
         with self._lock:
             self._latest_q = q
@@ -239,29 +241,44 @@ class NeroCartesianPatternModule(Module):
         logger.info("Pattern centre seeded from current EE", center=self._center.tolist())
 
     def _loop(self) -> None:
+        logger.info("DEBUG _loop thread started")
         dt = 1.0 / max(1e-3, self.config.rate_hz)
         t0 = time.perf_counter()
         last = t0
-        while not self._stop.is_set():
-            now = time.perf_counter()
-            elapsed = now - last
-            last = now
-            cmd: PoseStamped | None = None
-            with self._lock:
-                if self._center is None:
-                    self._try_seed()
-                if self._active and self._center is not None and self._orientation is not None:
-                    # Auto-drift the centre along the sweep axis.
-                    self._center[self._sweep_idx] += self._sweep_speed * elapsed
-                    phase = 2.0 * np.pi * ((now - t0) / self._period)
-                    offset = np.zeros(3)
-                    offset[self._poke_idx] = self._amplitude * np.sin(phase)
-                    world_pos = self._center + offset
-                    orientation = self._orientation
-                    cmd = self._to_base_command(world_pos, orientation)
-            if cmd is not None:
-                self.coordinator_cartesian_command.publish(cmd)
-            time.sleep(dt)
+        ticks = 0
+        try:
+            while not self._stop.is_set():
+                now = time.perf_counter()
+                elapsed = now - last
+                last = now
+                cmd: PoseStamped | None = None
+                with self._lock:
+                    if self._center is None:
+                        self._try_seed()
+                    if self._active and self._center is not None and self._orientation is not None:
+                        # Auto-drift the centre along the sweep axis.
+                        self._center[self._sweep_idx] += self._sweep_speed * elapsed
+                        phase = 2.0 * np.pi * ((now - t0) / self._period)
+                        offset = np.zeros(3)
+                        offset[self._poke_idx] = self._amplitude * np.sin(phase)
+                        world_pos = self._center + offset
+                        orientation = self._orientation
+                        cmd = self._to_base_command(world_pos, orientation)
+                if cmd is not None:
+                    self.coordinator_cartesian_command.publish(cmd)
+                ticks += 1
+                if ticks % 100 == 0:
+                    logger.info(
+                        "DEBUG _loop alive",
+                        ticks=ticks,
+                        seeded=self._center is not None,
+                        latest_q=self._latest_q is not None,
+                        active=self._active,
+                    )
+                time.sleep(dt)
+        except Exception:
+            logger.exception("DEBUG _loop thread crashed")
+            raise
 
     def _to_base_command(self, world_pos: np.ndarray, orientation: Quaternion) -> PoseStamped:
         world_pose = Pose(

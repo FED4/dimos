@@ -12,43 +12,49 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Runtime controller for the NERO poke pattern module (RPC client).
+"""Runtime controller for the NERO pattern planner module (RPC client).
 
-Drives NeroCartesianPatternModule at runtime: move the reference centre and
-reshape the motion while it streams. These are the same @rpc methods that will
-later be exposed as @skill for natural-language control.
+Drives NeroPatternPlannerModule at runtime: move the reference centre and switch
+the pattern while it streams. These are the same @rpc methods that will later be
+exposed as @skill for natural-language control.
 
 Two ways to use it:
 
-1. Interactive arrow-key jog loop (default) -- continuously nudge the poke
-   centre in the world X/Z plane with the arrow keys:
+1. Interactive arrow-key jog loop (default) -- continuously nudge the reference
+   centre in the world X/Z plane with the arrow keys and cycle patterns:
 
-       # Start a poke blueprint in another terminal first:
-       #   dimos run coordinator-nero-poke-mock      # simulate (Viser)
-       #   dimos run coordinator-nero-poke-left      # real left arm
-       python -m dimos.robot.manipulators.nero.scripts.demo_poke_control
+       # Start the coordinator + planner in two other terminals first:
+       #   dimos run coordinator-nero-cartesian-mock    # sim (Viser)
+       #   dimos run nero-pattern-planner-left          # the planner module
+       python -m dimos.robot.manipulators.nero.scripts.demo_pattern_control
 
    Controls:
        Up / Down     nudge centre +Z / -Z (up / down)
        Right / Left  nudge centre +X / -X (forward / back)
        w / s         nudge centre +Y / -Y (left / right)
        + / -         grow / shrink the nudge step
+       p             cycle pattern (hold -> line -> circle)
        SPACE         pause / resume streaming (set_active)
        q / ESC       quit
 
 2. Manual REPL, for scripted/one-off calls:
 
-       python -i -m dimos.robot.manipulators.nero.scripts.demo_poke_control
-       >>> center(); set_center(0.4, 0.1, 0.35); set_period(3); set_active(True)
+       python -i -m dimos.robot.manipulators.nero.scripts.demo_pattern_control
+       >>> center(); set_center(0.4, 0.1, 0.35); set_pattern("circle"); set_active(True)
 
 Available functions:
     center()                 current world-frame reference centre
-    set_center(x, y, z)      move the poke centre to an absolute world point
+    set_center(x, y, z)      move the centre to an absolute world point
     nudge(dx, dy, dz)        shift the centre by a world delta
-    set_period(s)            seconds per poke cycle (higher = slower)
-    set_amplitude(m)         poke half-stroke (metres)
-    set_sweep_speed(mps)     centre auto-drift along world X (0 = stop)
+    set_pattern(name)        switch pattern ("hold" / "line" / "circle")
+    list_patterns()          available pattern names
+    set_amplitude(m)         line half-stroke (metres)
+    set_radius(m)            circle radius (metres)
+    set_axis(a)              line world axis ("x"/"y"/"z")
+    set_plane(p)             circle world plane ("xy"/"xz"/"yz")
+    set_period(s)            seconds per pattern cycle
     set_active(on)           enable/disable streaming
+    get_state()              summary of pattern + params + centre
     jog()                    start the interactive arrow-key jog loop
 """
 
@@ -59,14 +65,15 @@ import traceback
 from typing import Any
 
 from dimos.core.rpc_client import RPCClient
-from dimos.robot.manipulators.nero.cartesian_pattern_module import NeroCartesianPatternModule
+from dimos.robot.manipulators.nero.pattern_planner_module import NeroPatternPlannerModule
 
-_client = RPCClient(None, NeroCartesianPatternModule)
+_client = RPCClient(None, NeroPatternPlannerModule)
 
 # Jog defaults.
 _DEFAULT_STEP = 0.01  # metres per key press
 _MIN_STEP = 0.001
 _MAX_STEP = 0.10
+_PATTERN_CYCLE = ["hold", "line", "circle"]
 
 
 def center() -> list[float]:
@@ -75,33 +82,58 @@ def center() -> list[float]:
 
 
 def set_center(x: float, y: float, z: float) -> str:
-    """Move the poke centre to an absolute world position (metres)."""
+    """Move the centre to an absolute world position (metres)."""
     return _client.set_center(x, y, z)
 
 
 def nudge(dx: float = 0.0, dy: float = 0.0, dz: float = 0.0) -> str:
-    """Shift the poke centre by a world-frame delta (metres)."""
+    """Shift the centre by a world-frame delta (metres)."""
     return _client.nudge(dx, dy, dz)
 
 
-def set_period(seconds: float) -> str:
-    """Set the poke cycle period in seconds."""
-    return _client.set_period(seconds)
+def set_pattern(name: str) -> str:
+    """Switch the active pattern ("hold" / "line" / "circle")."""
+    return _client.set_pattern(name)
+
+
+def list_patterns() -> list[str]:
+    """Return the available pattern names."""
+    return _client.list_patterns()
 
 
 def set_amplitude(meters: float) -> str:
-    """Set the poke half-stroke amplitude in metres."""
+    """Set the line half-stroke amplitude in metres."""
     return _client.set_amplitude(meters)
 
 
-def set_sweep_speed(mps: float) -> str:
-    """Set the centre auto-drift speed along world X (m/s, 0 = stop)."""
-    return _client.set_sweep_speed(mps)
+def set_radius(meters: float) -> str:
+    """Set the circle radius in metres."""
+    return _client.set_radius(meters)
+
+
+def set_axis(axis: str) -> str:
+    """Set the line world axis ("x"/"y"/"z")."""
+    return _client.set_axis(axis)
+
+
+def set_plane(plane: str) -> str:
+    """Set the circle world plane ("xy"/"xz"/"yz")."""
+    return _client.set_plane(plane)
+
+
+def set_period(seconds: float) -> str:
+    """Set the pattern cycle period in seconds."""
+    return _client.set_period(seconds)
 
 
 def set_active(on: bool) -> str:
     """Enable or disable streaming."""
     return _client.set_active(on)
+
+
+def get_state() -> str:
+    """Return a summary of the current pattern, shape params, and centre."""
+    return _client.get_state()
 
 
 def stop() -> None:
@@ -112,33 +144,35 @@ def stop() -> None:
 def _fmt_center(c: list[float]) -> str:
     """Format the world-frame centre for display."""
     if not c:
-        return "(not seeded yet -- is a poke coordinator running?)"
+        return "(not seeded yet -- is a coordinator running?)"
     return f"x={c[0]:+.3f}  y={c[1]:+.3f}  z={c[2]:+.3f}  (metres, world)"
 
 
-def _draw_ui(stdscr: Any, step: float, active: bool, status: str) -> None:
+def _draw_ui(stdscr: Any, step: float, pattern: str, active: bool, status: str) -> None:
     """Render the jog control UI."""
     stdscr.clear()
     height, width = stdscr.getmaxyx()
 
-    title = "NERO poke centre jog"
+    title = "NERO pattern planner jog"
     stdscr.addstr(0, max(0, (width - len(title)) // 2), title, curses.A_BOLD)
 
     lines = [
         "",
-        "Nudge the poke centre (world frame):",
+        "Nudge the reference centre (world frame):",
         "  Up / Down     +Z / -Z   (up / down)",
         "  Right / Left  +X / -X   (forward / back)",
         "  w / s         +Y / -Y   (left / right)",
         "",
         "  + / -         grow / shrink step",
+        "  p             cycle pattern",
         "  SPACE         pause / resume streaming",
         "  q / ESC       quit",
         "",
-        f"  step   : {step * 100:.1f} cm",
-        f"  active : {'ON' if active else 'PAUSED'}",
+        f"  step    : {step * 100:.1f} cm",
+        f"  pattern : {pattern}",
+        f"  active  : {'ON' if active else 'PAUSED'}",
         "",
-        f"  centre : {_fmt_center(center())}",
+        f"  centre  : {_fmt_center(center())}",
         "",
         f"  {status}",
     ]
@@ -149,20 +183,22 @@ def _draw_ui(stdscr: Any, step: float, active: bool, status: str) -> None:
 
 
 def _jog_loop(stdscr: Any) -> None:
-    """curses arrow-key loop: continuously nudge the poke centre."""
+    """curses arrow-key loop: continuously nudge the centre and cycle patterns."""
     curses.curs_set(0)
     stdscr.nodelay(True)
     stdscr.timeout(100)  # ms; redraws even with no key so state stays fresh
 
     step = _DEFAULT_STEP
     active = True
-    status = "Ready. Arrow keys to jog."
-    _draw_ui(stdscr, step, active, status)
+    pattern_i = _PATTERN_CYCLE.index("line") if "line" in _PATTERN_CYCLE else 0
+    pattern = _PATTERN_CYCLE[pattern_i]
+    status = "Ready. Arrow keys to jog, p to cycle pattern."
+    _draw_ui(stdscr, step, pattern, active, status)
 
     while True:
         key = stdscr.getch()
-        if key == -1:  # timeout, no key -- refresh (centre may drift via sweep)
-            _draw_ui(stdscr, step, active, status)
+        if key == -1:  # timeout, no key -- refresh
+            _draw_ui(stdscr, step, pattern, active, status)
             continue
 
         if key in (27, 3, ord("q")):  # ESC, Ctrl-C, q
@@ -188,11 +224,15 @@ def _jog_loop(stdscr: Any) -> None:
         elif key_char in ("-", "_"):
             step = max(_MIN_STEP, round(step - 0.005, 4))
             status = f"step = {step * 100:.1f} cm"
+        elif key_char == "p":
+            pattern_i = (pattern_i + 1) % len(_PATTERN_CYCLE)
+            pattern = _PATTERN_CYCLE[pattern_i]
+            status = set_pattern(pattern)
         elif key_char == " ":
             active = not active
             status = set_active(active)
 
-        _draw_ui(stdscr, step, active, status)
+        _draw_ui(stdscr, step, pattern, active, status)
 
 
 def jog() -> None:
