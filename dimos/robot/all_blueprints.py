@@ -121,6 +121,8 @@ all_blueprints = {
     "teleop-phone-go2-fleet": "dimos.teleop.phone.blueprints:teleop_phone_go2_fleet",
     "teleop-quest-dual": "dimos.teleop.quest.blueprints:teleop_quest_dual",
     "teleop-quest-go2": "dimos.teleop.quest.blueprints:teleop_quest_go2",
+    "teleop-quest-nero": "dimos.robot.manipulators.nero.blueprints.quest_teleop:teleop_quest_nero",
+    "teleop-quest-nero-mock": "dimos.robot.manipulators.nero.blueprints.quest_teleop:teleop_quest_nero_mock",
     "teleop-quest-piper": "dimos.teleop.quest.blueprints:teleop_quest_piper",
     "teleop-quest-rerun": "dimos.teleop.quest.blueprints:teleop_quest_rerun",
     "teleop-quest-xarm6": "dimos.teleop.quest.blueprints:teleop_quest_xarm6",
@@ -186,6 +188,8 @@ all_modules = {
     "alfred-high-level": "dimos.robot.diy.alfred.effector_high_level.AlfredHighLevel",
     "arm-command-module": "dimos.teleop.hosted.arm_command.ArmCommandModule",
     "arm-teleop-module": "dimos.teleop.quest.quest_extensions.ArmTeleopModule",
+    # ADVX massage app (external, on PYTHONPATH): Quest -> anchor/waypoint teaching.
+    "advx-quest-teach": "advx_nero_teaching.quest_bridge_module.QuestTeachingBridgeModule",
     "b-box-navigation-module": "dimos.navigation.bbox_navigation.BBoxNavigationModule",
     "b1-connection-module": "dimos.robot.unitree.b1.connection.B1ConnectionModule",
     "basic-path-follower": "dimos.navigation.basic_path_follower.module.BasicPathFollower",

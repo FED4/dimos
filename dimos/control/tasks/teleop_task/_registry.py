@@ -22,3 +22,7 @@ TASK_CONSUMES = {
         "teleop_buttons": ("on_teleop_buttons", "broadcast"),
     },
 }
+
+TASK_EXPOSES = {
+    "teleop_ik": ["configure", "get_config"],
+}

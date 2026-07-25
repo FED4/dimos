@@ -48,6 +48,8 @@ from dimos.robot.manipulators.nero.config import (
     NERO_LEFT_BASE_Y,
     NERO_RIGHT_BASE_Y,
     NERO_BASE_Z,
+    NERO_EE_JOINT_ID,
+    NERO_FK_MODEL,
     nero_hardware,
     nero_real_hardware,
 )
@@ -156,5 +158,66 @@ coordinator_nero_servo_bimanual = ControlCoordinator.blueprint(
             priority=10,
             params={"timeout": _SERVO_TIMEOUT},
         ),
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# Teleop-IK coordinators (Quest / cartesian streaming, SERVO_POSITION mode)
+#
+# The TeleopIKTask accepts cartesian delta poses on the coordinator's
+# ``coordinator_cartesian_command`` stream (routed by frame_id == task name)
+# and runs an internal Pinocchio IK to emit joint servo commands at 100 Hz.
+# Wire a Quest ``ArmTeleopModule`` in and remap its per-hand outputs onto
+# ``coordinator_cartesian_command`` (see the teleop-quest-nero blueprint).
+#
+# Task names teleop_left_arm / teleop_right_arm must match the ArmTeleopModule
+# task_names mapping so each controller drives the correct arm.
+# ---------------------------------------------------------------------------
+
+_TELEOP_TICK_RATE = 100.0
+_TELEOP_MAX_JOINT_DELTA_DEG = 5.0  # ~500 deg/s at 100 Hz — teleop safety clamp
+
+
+def _nero_teleop_task(hardware, hand: str) -> TaskConfig:
+    """TaskConfig for a per-arm NERO teleop-IK task.
+
+    hand: "left" or "right" — selects which Quest controller's primary button
+    (X for left, A for right) engages this arm.
+    """
+    return TaskConfig(
+        name=f"teleop_{hardware.hardware_id}",  # teleop_left_arm / teleop_right_arm
+        type="teleop_ik",
+        joint_names=hardware.joints,
+        priority=10,
+        params={
+            "model_path": str(NERO_FK_MODEL),
+            "ee_joint_id": NERO_EE_JOINT_ID,
+            "hand": hand,
+            "max_joint_delta_deg": _TELEOP_MAX_JOINT_DELTA_DEG,
+        },
+    )
+
+
+# Mock: no hardware address, safe for Quest bring-up + viser preview.
+coordinator_nero_teleop_mock = ControlCoordinator.blueprint(
+    tick_rate=_TELEOP_TICK_RATE,
+    publish_joint_state=True,
+    joint_state_frame_id="coordinator",
+    hardware=[mock_left, mock_right],
+    tasks=[
+        _nero_teleop_task(mock_left, "left"),
+        _nero_teleop_task(mock_right, "right"),
+    ],
+)
+
+# Real dual-arm teleop over CAN. Only run with hardware powered and clear.
+coordinator_nero_teleop_bimanual = ControlCoordinator.blueprint(
+    tick_rate=_TELEOP_TICK_RATE,
+    publish_joint_state=True,
+    joint_state_frame_id="coordinator",
+    hardware=[left_hw, right_hw],
+    tasks=[
+        _nero_teleop_task(left_hw, "left"),
+        _nero_teleop_task(right_hw, "right"),
     ],
 )

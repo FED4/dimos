@@ -231,6 +231,10 @@ web = [
     "sse-starlette>=2.2.1",
     "uvicorn>=0.34.0",
     "jinja2>=3.1.6",
+    # Required by FastAPI to serve the Quest/phone teleop web app (form/static
+    # handling in the embedded HTTPS server); without it ArmTeleopModule.start()
+    # raises "Form data requires python-multipart" and the run aborts.
+    "python-multipart>=0.0.9",
     "ffmpeg-python",
     "soundfile",
 ]

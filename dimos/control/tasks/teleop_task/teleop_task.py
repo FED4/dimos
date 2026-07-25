@@ -351,6 +351,51 @@ class TeleopIKTask(BaseControlTask):
 
         return True
 
+    def configure(
+        self,
+        max_joint_delta_deg: float | None = None,
+        timeout: float | None = None,
+        gripper_open_pos: float | None = None,
+        gripper_closed_pos: float | None = None,
+        **ignored: Any,
+    ) -> bool:
+        """Live-update teleop control parameters.
+
+        These values are read on every tick/button update, so changes made via
+        ControlCoordinator.task_invoke(..., "configure", ...) take effect
+        without restarting the coordinator or re-engaging XR.
+        """
+        with self._lock:
+            if max_joint_delta_deg is not None:
+                if max_joint_delta_deg <= 0:
+                    raise ValueError("max_joint_delta_deg must be > 0")
+                self._config.max_joint_delta_deg = float(max_joint_delta_deg)
+            if timeout is not None:
+                if timeout < 0:
+                    raise ValueError("timeout must be >= 0")
+                self._config.timeout = float(timeout)
+            if gripper_open_pos is not None:
+                self._config.gripper_open_pos = float(gripper_open_pos)
+            if gripper_closed_pos is not None:
+                self._config.gripper_closed_pos = float(gripper_closed_pos)
+        if ignored:
+            logger.info(
+                f"TeleopIKTask '{self._name}': ignoring unknown configure "
+                f"kwargs {sorted(ignored)}"
+            )
+        return True
+
+    def get_config(self) -> dict[str, float | str | None]:
+        """Return live teleop parameters for operator UIs."""
+        with self._lock:
+            return {
+                "hand": self._config.hand,
+                "timeout": self._config.timeout,
+                "max_joint_delta_deg": self._config.max_joint_delta_deg,
+                "gripper_open_pos": self._config.gripper_open_pos,
+                "gripper_closed_pos": self._config.gripper_closed_pos,
+            }
+
     def start(self) -> None:
         """Activate the task (start accepting and outputting commands)."""
         with self._lock:
