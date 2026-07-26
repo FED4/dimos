@@ -54,10 +54,17 @@ DEFAULT_DISABLE_ON_DISCONNECT = False
 #   "cpv"    -> position-velocity mode, per-joint move_cpv_pos (smoothed by the driver)
 #   "mit_js" -> MIT passthrough (follower) mode, move_js with the full joint list in one
 #               call and driver-default gains (no smoothing/planning; faster response).
-# Both realize the same DimOS ControlMode.SERVO_POSITION; the driver call differs.
+#   "move_j" -> joint motion mode, driver-planned move_j to each streamed target. The
+#               driver interpolates between targets, so motion is smoother/less jumpy
+#               than raw CPV setpoints at the cost of lag (it is a planned move, and
+#               each new target supersedes the previous one). Speed is set once at
+#               connect via speed_percent, not per command. Requires joint motion mode
+#               ("j") -- move_j is REJECTED while the driver is in cpv/js mode.
+# All three realize the same DimOS ControlMode.SERVO_POSITION; the driver call differs.
 CPV_SERVO_BACKEND = "cpv"
 MIT_JS_SERVO_BACKEND = "mit_js"
-SERVO_BACKENDS = (CPV_SERVO_BACKEND, MIT_JS_SERVO_BACKEND)
+MOVE_J_SERVO_BACKEND = "move_j"
+SERVO_BACKENDS = (CPV_SERVO_BACKEND, MIT_JS_SERVO_BACKEND, MOVE_J_SERVO_BACKEND)
 DEFAULT_SERVO_BACKEND = CPV_SERVO_BACKEND
 
 DEFAULT_JOINT_LIMITS = JointLimits(
@@ -281,6 +288,20 @@ class NeroAdapter(ManipulatorAdapter):
                 return False
             if not self._set_motion_mode(JS_MOTION_MODE):
                 return False
+        elif (
+            self._sdk is not None
+            and mode == ControlMode.SERVO_POSITION
+            and self._servo_backend == MOVE_J_SERVO_BACKEND
+        ):
+            # move_j is a joint-motion-mode call; it is rejected in cpv/js mode.
+            if not hasattr(self._sdk, "move_j"):
+                logger.error(
+                    "NERO move_j backend requested but pyAgxArm driver does not expose move_j",
+                    firmware_version=self._firmware_version,
+                )
+                return False
+            if not self._set_motion_mode(JOINT_MOTION_MODE):
+                return False
         elif self._sdk is not None and mode in (ControlMode.SERVO_POSITION, ControlMode.VELOCITY):
             if not self._has_cpv_support():
                 logger.error(
@@ -364,6 +385,8 @@ class NeroAdapter(ManipulatorAdapter):
             if self._control_mode == ControlMode.SERVO_POSITION:
                 if self._servo_backend == MIT_JS_SERVO_BACKEND:
                     return self._write_js_positions(positions)
+                if self._servo_backend == MOVE_J_SERVO_BACKEND:
+                    return self._write_move_j_positions(positions)
                 return self._write_cpv_positions(positions)
             else:
                 self._set_speed_percent(max(1, min(100, round(velocity * 100))))
@@ -580,6 +603,22 @@ class NeroAdapter(ManipulatorAdapter):
         # move_js takes the whole joint vector in a single call (MIT passthrough,
         # driver-default gains) -- unlike per-joint move_cpv_pos.
         sdk.move_js([float(position) for position in positions])
+        return True
+
+    def _write_move_j_positions(self, positions: list[float]) -> bool:
+        """Stream a target as a driver-planned joint move (move_j).
+
+        The driver plans/interpolates toward each target, which smooths streamed
+        setpoints at the cost of lag; a new target supersedes the previous move.
+        Speed is deliberately NOT set per call (it is applied once at connect via
+        speed_percent) -- doing so would add a CAN round-trip on every tick.
+        """
+        sdk = self._sdk
+        if sdk is None or not hasattr(sdk, "move_j"):
+            return False
+        if not self._set_motion_mode(JOINT_MOTION_MODE):
+            return False
+        sdk.move_j([float(position) for position in positions])
         return True
 
     def _write_cpv_velocities(self, velocities: list[float]) -> bool:

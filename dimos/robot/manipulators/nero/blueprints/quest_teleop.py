@@ -36,21 +36,58 @@ Blueprints (built incrementally):
 from __future__ import annotations
 
 from dimos.core.coordination.blueprints import autoconnect
+from dimos.manipulation.manipulation_module import ManipulationModule
+from dimos.robot.manipulators.common.blueprints import cartesian_ik_task, coordinator
 from dimos.robot.manipulators.nero.blueprints.cartesian import (
+    CARTESIAN_IK_LEFT_TASK,
+    CARTESIAN_IK_RIGHT_TASK,
     coordinator_nero_cartesian_bimanual,
     coordinator_nero_cartesian_bimanual_mock,
     coordinator_nero_cartesian_left,
     coordinator_nero_cartesian_right,
+    left_model,
+    nero_startup_obstacles,
+    nero_visualization,
+    right_model,
+)
+from dimos.robot.manipulators.nero.config import (
+    NERO_EE_JOINT_ID,
+    NERO_FK_MODEL,
+    NERO_LEFT_CAN,
+    NERO_RIGHT_CAN,
+    nero_real_hardware,
 )
 from dimos.robot.manipulators.nero.quest_stream_module import NeroControllerStreamModule
 from dimos.robot.manipulators.nero.quest_teleop_module import NeroBimanualQuestTeleopModule
 
+# Controller sampling rate for the Quest stream module. The default 50 Hz
+# produced a zero-order-hold staircase against the ~100 Hz command loop (each
+# sample held for two ticks -> step changes -> IK jumps -> visible jitter).
+# 90 Hz matches the Quest 3 refresh and the client's ~80 Hz send cap.
+_CONTROLLER_RATE_HZ = 90.0
+
 # Teleop tuning shared by the mock and real blueprints so they never drift.
-# Settled during the Step 3 mock bring-up (axes verified in Viser):
-#   swap_controllers  left controller -> left arm, right -> right (sides matched)
+# Sides/axes settled during the Step 3 mock bring-up (verified in Viser):
+#   swap_controllers  which controller drives which arm
 #   *_axis_map        world offset <- signed controller-delta axis, per arm
+#                     (also conjugated onto orientation, so rotation matches)
 #   position_scale    controller metres -> world metres (0.5 = half; calmer)
 #   max_offset_m      max reach from the engage anchor (workspace guard)
+#
+# Smoothness / robustness (see quest_teleop_module docstring for why):
+#   track_orientation      follow controller rotation. Holding a fixed
+#                          orientation over-constrains the arm and is a common
+#                          cause of unreachable targets and wedged poses.
+#   rotation_scale         fraction of controller rotation applied (0.5 = calm)
+#   smoothing_tau_s        low-pass time constant on the target
+#   max_speed_mps          target speed limit -- keeps IK inside the task's
+#                          per-tick joint-delta clamp (which otherwise REJECTS
+#                          the solution and emits nothing -> stall/lurch)
+#   max_angular_speed_dps  target angular speed limit
+#   max_tracking_error_m   the leash: target may never sit further than this
+#                          from the measured EE, so a saturated or unreachable
+#                          arm recovers instead of staying wedged
+#   deadband_m             ignore sub-mm controller dither
 _TELEOP_TUNING: dict = dict(
     motion_enabled=True,
     position_scale=0.5,
@@ -58,7 +95,19 @@ _TELEOP_TUNING: dict = dict(
     swap_controllers=True,
     left_axis_map=["-x", "-y", "z"],
     right_axis_map=["-x", "-y", "z"],
+    track_orientation=True,
+    rotation_scale=0.5,
+    smoothing_tau_s=0.08,
+    max_speed_mps=0.35,
+    max_angular_speed_dps=120.0,
+    max_tracking_error_m=0.12,
+    deadband_m=0.001,
 )
+
+
+def _controller_stream():  # type: ignore[no-untyped-def]
+    """Quest controller stream module at the tuned sample rate."""
+    return NeroControllerStreamModule.blueprint(control_loop_hz=_CONTROLLER_RATE_HZ)
 
 
 def _teleop_bridge():  # type: ignore[no-untyped-def]
@@ -95,7 +144,7 @@ teleop_quest_nero_engage_mock = autoconnect(
 # ---------------------------------------------------------------------------
 teleop_quest_nero_bimanual_mock = autoconnect(
     coordinator_nero_cartesian_bimanual_mock,
-    NeroControllerStreamModule.blueprint(),
+    _controller_stream(),
     _teleop_bridge(),
 )
 
@@ -113,7 +162,7 @@ teleop_quest_nero_bimanual_mock = autoconnect(
 # ---------------------------------------------------------------------------
 teleop_quest_nero_bimanual = autoconnect(
     coordinator_nero_cartesian_bimanual,
-    NeroControllerStreamModule.blueprint(),
+    _controller_stream(),
     _teleop_bridge(),
 )
 
@@ -133,12 +182,129 @@ teleop_quest_nero_bimanual = autoconnect(
 # ---------------------------------------------------------------------------
 teleop_quest_nero_left = autoconnect(
     coordinator_nero_cartesian_left,
-    NeroControllerStreamModule.blueprint(),
+    _controller_stream(),
     _teleop_bridge(),
 )
 
 teleop_quest_nero_right = autoconnect(
     coordinator_nero_cartesian_right,
-    NeroControllerStreamModule.blueprint(),
+    _controller_stream(),
     _teleop_bridge(),
+)
+
+
+# ---------------------------------------------------------------------------
+# move_j teleop -- driver-planned motion instead of raw CPV setpoints.
+#
+# CPV streams position-velocity setpoints straight to each joint, so any
+# roughness in the IK solution shows up directly as jitter/jumps at the joint.
+# The "move_j" servo backend instead hands each streamed target to the driver as
+# a planned joint move: the driver interpolates toward it and a new target
+# supersedes the previous move. That trades latency for much smoother motion,
+# and tolerates a lower command rate.
+#
+# Differences from the CPV blueprints above:
+#   * hardware built with servo_backend="move_j"
+#   * command_rate_hz throttled (a planned move should not be re-issued at
+#     100 Hz or the driver re-plans constantly); still far above the
+#     cartesian_ik task's 0.5 s timeout
+#   * lighter bridge smoothing, since the driver now does the interpolation
+# ---------------------------------------------------------------------------
+
+_MOVE_J_COMMAND_RATE_HZ = 25.0
+
+_TELEOP_TUNING_MOVE_J: dict = dict(
+    _TELEOP_TUNING,
+    command_rate_hz=_MOVE_J_COMMAND_RATE_HZ,
+    # The driver interpolates now, so less bridge-side filtering is needed.
+    smoothing_tau_s=0.05,
+    # Planned moves lag, so allow a longer leash before clamping the target.
+    max_tracking_error_m=0.18,
+)
+
+left_hw_move_j = nero_real_hardware(
+    "left_arm", address=NERO_LEFT_CAN, servo_backend="move_j"
+)
+right_hw_move_j = nero_real_hardware(
+    "right_arm", address=NERO_RIGHT_CAN, servo_backend="move_j"
+)
+
+
+def _teleop_bridge_move_j():  # type: ignore[no-untyped-def]
+    """Bimanual bridge tuned for the driver-planned move_j backend."""
+    return NeroBimanualQuestTeleopModule.blueprint(**_TELEOP_TUNING_MOVE_J)
+
+
+def _viz_move_j(*models):  # type: ignore[no-untyped-def]
+    """Viser twin for the move_j blueprints (mirrors cartesian._viz)."""
+    return ManipulationModule.blueprint(
+        robots=list(models),
+        visualization=nero_visualization,
+        startup_obstacles=nero_startup_obstacles,
+    )
+
+
+def _cartesian_coordinator_move_j(hardware, task_name):  # type: ignore[no-untyped-def]
+    """One cartesian_ik task at 100 Hz against move_j hardware."""
+    return coordinator(
+        hardware=[hardware],
+        tasks=[
+            cartesian_ik_task(
+                hardware,
+                model_path=NERO_FK_MODEL,
+                ee_joint_id=NERO_EE_JOINT_ID,
+                name=task_name,
+            )
+        ],
+        tick_rate=100.0,
+    )
+
+
+# Real bimanual, driver-planned move_j (left=can0, right=can1).
+teleop_quest_nero_bimanual_move_j = autoconnect(
+    coordinator(
+        hardware=[left_hw_move_j, right_hw_move_j],
+        tasks=[
+            cartesian_ik_task(
+                left_hw_move_j,
+                model_path=NERO_FK_MODEL,
+                ee_joint_id=NERO_EE_JOINT_ID,
+                name=CARTESIAN_IK_LEFT_TASK,
+            ),
+            cartesian_ik_task(
+                right_hw_move_j,
+                model_path=NERO_FK_MODEL,
+                ee_joint_id=NERO_EE_JOINT_ID,
+                name=CARTESIAN_IK_RIGHT_TASK,
+            ),
+        ],
+        tick_rate=100.0,
+    ),
+    _viz_move_j(left_model, right_model),
+    _controller_stream(),
+    _teleop_bridge_move_j(),
+)
+
+# Real single-arm, driver-planned move_j (fault-isolated per CAN bus).
+teleop_quest_nero_left_move_j = autoconnect(
+    _cartesian_coordinator_move_j(left_hw_move_j, CARTESIAN_IK_LEFT_TASK),
+    _viz_move_j(left_model),
+    _controller_stream(),
+    _teleop_bridge_move_j(),
+)
+
+teleop_quest_nero_right_move_j = autoconnect(
+    _cartesian_coordinator_move_j(right_hw_move_j, CARTESIAN_IK_RIGHT_TASK),
+    _viz_move_j(right_model),
+    _controller_stream(),
+    _teleop_bridge_move_j(),
+)
+
+# Mock counterpart: exercises the throttled command rate + lighter smoothing
+# without hardware. The mock adapter ignores the servo backend, so this validates
+# the tuning and wiring only, not the driver-side planning behaviour.
+teleop_quest_nero_bimanual_move_j_mock = autoconnect(
+    coordinator_nero_cartesian_bimanual_mock,
+    _controller_stream(),
+    _teleop_bridge_move_j(),
 )

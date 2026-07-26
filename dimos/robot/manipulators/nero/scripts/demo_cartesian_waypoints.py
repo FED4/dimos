@@ -70,9 +70,9 @@ from dimos.msgs.geometry_msgs.Vector3 import Vector3
 # replace it with your own absolute poses, e.g.:
 #
 #   WAYPOINTS = [
-#       (0.35, 0.10, 0.45, None, None, None),
-#       (0.40, 0.10, 0.45, None, None, None),
-#       (0.40, 0.10, 0.40, None, None, None),
+#       (-0.05, 0.066, 0.457, None, None, None),
+#       #(0.40, 0.10, 0.45, None, None, None),
+#       #(0.40, 0.10, 0.40, None, None, None),
 #   ]
 # ---------------------------------------------------------------------------
 WAYPOINTS: list[tuple[float, float, float, float | None, float | None, float | None]] = []
